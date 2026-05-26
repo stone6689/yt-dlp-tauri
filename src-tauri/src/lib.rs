@@ -45,6 +45,7 @@ struct VideoMetadata {
     id: Option<String>,
     webpage_url: String,
     thumbnail_url: Option<String>,
+    thumbnail_urls: Vec<String>,
     duration_seconds: Option<f64>,
     description: Option<String>,
     format_options: Vec<VideoFormatOption>,
@@ -1155,11 +1156,8 @@ fn parse_metadata_json(json: &str, fallback_url: &str) -> Result<VideoMetadata, 
         .and_then(Value::as_str)
         .unwrap_or(fallback_url)
         .to_string();
-    let thumbnail_url = root
-        .get("thumbnail")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| read_last_thumbnail(&root));
+    let thumbnail_urls = read_thumbnail_urls(&root);
+    let thumbnail_url = thumbnail_urls.first().cloned();
     let duration_seconds = root.get("duration").and_then(Value::as_f64);
     let description = root
         .get("description")
@@ -1172,6 +1170,7 @@ fn parse_metadata_json(json: &str, fallback_url: &str) -> Result<VideoMetadata, 
         id,
         webpage_url,
         thumbnail_url,
+        thumbnail_urls,
         duration_seconds,
         description,
         format_options,
@@ -1218,16 +1217,52 @@ fn read_available_heights(root: &Value) -> Vec<u32> {
     heights.into_iter().collect()
 }
 
-fn read_last_thumbnail(root: &Value) -> Option<String> {
-    root.get("thumbnails")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("url").and_then(Value::as_str))
-                .last()
-        })
-        .map(str::to_string)
+fn read_thumbnail_urls(root: &Value) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    if let Some(url) = root.get("thumbnail").and_then(Value::as_str) {
+        push_thumbnail_url(&mut urls, &mut seen, url);
+    }
+
+    if let Some(items) = root.get("thumbnails").and_then(Value::as_array) {
+        for url in items
+            .iter()
+            .rev()
+            .filter_map(|item| item.get("url").and_then(Value::as_str))
+        {
+            push_thumbnail_url(&mut urls, &mut seen, url);
+        }
+    }
+
+    urls
+}
+
+fn push_thumbnail_url(urls: &mut Vec<String>, seen: &mut BTreeSet<String>, raw_url: &str) {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("null")
+        || trimmed.eq_ignore_ascii_case("none")
+    {
+        return;
+    }
+
+    let normalized = if trimmed.starts_with("//") {
+        format!("https:{trimmed}")
+    } else {
+        trimmed.to_string()
+    };
+
+    if let Some(rest) = normalized.strip_prefix("http://") {
+        push_unique_thumbnail_url(urls, seen, format!("https://{rest}"));
+    }
+    push_unique_thumbnail_url(urls, seen, normalized);
+}
+
+fn push_unique_thumbnail_url(urls: &mut Vec<String>, seen: &mut BTreeSet<String>, url: String) {
+    if seen.insert(url.clone()) {
+        urls.push(url);
+    }
 }
 
 fn parse_progress_line(line: &str) -> Option<DownloadProgress> {
@@ -1601,6 +1636,34 @@ mod tests {
         assert_eq!(
             message,
             "Failed to extract archive. Process terminated without an exit code. Archive is invalid"
+        );
+    }
+
+    #[test]
+    fn parse_metadata_upgrades_http_thumbnail_candidates() {
+        let metadata = parse_metadata_json(
+            r#"
+            {
+              "title": "Bilibili test",
+              "webpage_url": "https://www.bilibili.com/video/BV1test",
+              "thumbnail": "http://i0.hdslb.com/bfs/archive/cover.jpg",
+              "formats": []
+            }
+            "#,
+            "https://www.bilibili.com/video/BV1test",
+        )
+        .expect("metadata should parse");
+
+        assert_eq!(
+            metadata.thumbnail_url.as_deref(),
+            Some("https://i0.hdslb.com/bfs/archive/cover.jpg")
+        );
+        assert_eq!(
+            metadata.thumbnail_urls,
+            vec![
+                "https://i0.hdslb.com/bfs/archive/cover.jpg".to_string(),
+                "http://i0.hdslb.com/bfs/archive/cover.jpg".to_string()
+            ]
         );
     }
 }

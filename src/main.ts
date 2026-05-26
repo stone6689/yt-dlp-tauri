@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import packageInfo from "../package.json";
+import { thumbnailUrlCandidates } from "./thumbnail";
 import { type GithubAccessMode, getUpdateStatus, parseLatestRelease, resolveGithubUrl } from "./update-check";
 
 type ToolStatus = {
@@ -27,6 +28,7 @@ type VideoMetadata = {
   id?: string;
   webpage_url: string;
   thumbnail_url?: string;
+  thumbnail_urls?: string[];
   duration_seconds?: number;
   description?: string;
   format_options: VideoFormatOption[];
@@ -272,6 +274,8 @@ const state = {
   updateStatus: null as { key: TranslationKey; values: Record<string, string | number>; tone: UpdateTone } | null,
   githubAccessMode: resolveInitialGithubAccessMode(),
   language: resolveInitialLanguage(),
+  thumbnailCandidates: [] as string[],
+  thumbnailCandidateIndex: 0,
 };
 
 const elements = {
@@ -445,6 +449,8 @@ function bindEvents() {
   elements.githubLink.addEventListener("click", () => void openProjectRepository());
   elements.githubDirect.addEventListener("click", () => setGithubAccessMode("direct"));
   elements.githubProxy.addEventListener("click", () => setGithubAccessMode("gh-proxy"));
+  elements.thumbnail.addEventListener("load", () => showLoadedThumbnail());
+  elements.thumbnail.addEventListener("error", () => loadNextThumbnailCandidate());
   elements.quality.addEventListener("change", () => {
     state.selectedFormat = state.metadata?.format_options[elements.quality.selectedIndex] ?? null;
     updateButtons();
@@ -741,21 +747,67 @@ function renderMetadata(metadata: VideoMetadata) {
     .join(" · ");
   elements.description.textContent = metadata.description?.trim() || t("preview.noDescription");
 
-  if (metadata.thumbnail_url) {
-    elements.thumbnail.src = metadata.thumbnail_url;
-    elements.thumbnail.hidden = false;
-    elements.thumbnailEmpty.hidden = true;
-  } else {
-    elements.thumbnail.removeAttribute("src");
-    elements.thumbnail.hidden = true;
-    elements.thumbnailEmpty.hidden = false;
-  }
+  renderThumbnailCandidates(thumbnailUrlCandidates(metadata));
 }
 
 function renderEmptyPreview(message: string) {
   elements.title.textContent = t("preview.noVideo");
   elements.details.textContent = message;
   elements.description.textContent = "";
+  clearThumbnail();
+}
+
+function renderThumbnailCandidates(urls: string[]) {
+  state.thumbnailCandidates = urls;
+  state.thumbnailCandidateIndex = 0;
+
+  if (urls.length === 0) {
+    clearThumbnail();
+    return;
+  }
+
+  loadThumbnailCandidate(0);
+}
+
+function loadThumbnailCandidate(index: number) {
+  const url = state.thumbnailCandidates[index];
+  if (!url) {
+    clearThumbnail();
+    return;
+  }
+
+  state.thumbnailCandidateIndex = index;
+  elements.thumbnail.dataset.thumbnailIndex = String(index);
+  elements.thumbnail.hidden = true;
+  elements.thumbnailEmpty.hidden = false;
+  elements.thumbnail.src = url;
+}
+
+function showLoadedThumbnail() {
+  const currentIndex = Number(elements.thumbnail.dataset.thumbnailIndex ?? state.thumbnailCandidateIndex);
+  if (!state.thumbnailCandidates[currentIndex]) {
+    return;
+  }
+
+  elements.thumbnail.hidden = false;
+  elements.thumbnailEmpty.hidden = true;
+}
+
+function loadNextThumbnailCandidate() {
+  const currentIndex = Number(elements.thumbnail.dataset.thumbnailIndex ?? state.thumbnailCandidateIndex);
+  const nextIndex = currentIndex + 1;
+  if (nextIndex < state.thumbnailCandidates.length) {
+    loadThumbnailCandidate(nextIndex);
+    return;
+  }
+
+  clearThumbnail();
+}
+
+function clearThumbnail() {
+  state.thumbnailCandidates = [];
+  state.thumbnailCandidateIndex = 0;
+  delete elements.thumbnail.dataset.thumbnailIndex;
   elements.thumbnail.removeAttribute("src");
   elements.thumbnail.hidden = true;
   elements.thumbnailEmpty.hidden = false;
