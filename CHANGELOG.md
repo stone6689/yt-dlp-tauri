@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.1.2 - 2026-05-26
+
+- Added GitHub release notes generation from the matching `CHANGELOG.md` version section.
+- Finished the video metadata progress text after successful or failed parsing.
+- Improved GitHub update check errors for API rate limits with reset-time guidance.
+- Fixed Bilibili thumbnail previews by suppressing referrers on remote cover images.
+
 ## 0.1.1 - 2026-05-26
 
 - Hid background Windows command windows during tool checks, installs, metadata parsing, downloads, extraction, and cancellation.
