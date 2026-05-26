@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import packageInfo from "../package.json";
 import { thumbnailUrlCandidates } from "./thumbnail";
-import { type GithubAccessMode, getUpdateStatus, parseLatestRelease, resolveGithubUrl } from "./update-check";
+import { type GithubAccessMode, getUpdateStatus, parseGithubHttpError, parseLatestRelease, resolveGithubUrl } from "./update-check";
 
 type ToolStatus = {
   name: string;
@@ -97,6 +97,8 @@ const translations = {
     "download.quality": "Quality",
     "progress.idle": "Idle",
     "progress.parsing": "Parsing video metadata...",
+    "progress.metadataReady": "Metadata parsed. Choose a quality, then download.",
+    "progress.metadataFailed": "Metadata parsing failed.",
     "progress.startingDownload": "Starting {quality} download...",
     "progress.savedTo": "Saved to {path}",
     "progress.completedOpenFolder": "Download completed. Open the folder to view the file.",
@@ -122,6 +124,8 @@ const translations = {
     "updates.noRelease": "No GitHub release found yet.",
     "updates.invalidRelease": "GitHub returned an unreadable release.",
     "updates.failed": "Could not check updates: {message}",
+    "updates.rateLimited": "GitHub API rate limit reached. Try again after {time}, or switch GitHub access mode.",
+    "updates.later": "later",
     "settings.kicker": "Preferences",
     "settings.title": "Settings",
     "settings.outputFolder": "Output folder",
@@ -194,6 +198,8 @@ const translations = {
     "download.quality": "清晰度",
     "progress.idle": "空闲",
     "progress.parsing": "正在解析视频信息...",
+    "progress.metadataReady": "视频信息已解析。选择清晰度后即可下载。",
+    "progress.metadataFailed": "视频信息解析失败。",
     "progress.startingDownload": "开始下载 {quality}...",
     "progress.savedTo": "已保存到 {path}",
     "progress.completedOpenFolder": "下载完成。打开目录即可查看文件。",
@@ -219,6 +225,8 @@ const translations = {
     "updates.noRelease": "暂未找到 GitHub Release。",
     "updates.invalidRelease": "GitHub 返回的发布信息无法读取。",
     "updates.failed": "检查更新失败：{message}",
+    "updates.rateLimited": "GitHub API 访问额度已用尽。请在 {time} 后重试，或切换 GitHub 访问方式。",
+    "updates.later": "稍后",
     "settings.kicker": "偏好",
     "settings.title": "设置",
     "settings.outputFolder": "输出目录",
@@ -554,10 +562,12 @@ async function parseCurrentUrl() {
     state.selectedFormat = metadata.format_options[0] ?? null;
     renderMetadata(metadata);
     renderQualityOptions(metadata.format_options);
+    elements.progressText.textContent = t("progress.metadataReady");
     showNotice(t("notice.metadataParsed"), "success");
     logEvent(t("event.parsed", { title: metadata.title }));
   } catch (error) {
     renderEmptyPreview(t("preview.parseFailed"));
+    elements.progressText.textContent = t("progress.metadataFailed");
     showNotice(String(error), "error");
     logEvent(t("event.metadataFailed"));
   } finally {
@@ -671,7 +681,12 @@ async function checkForUpdates() {
     }
 
     if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`.trim());
+      const githubError = await parseGithubHttpError(response);
+      if (githubError.isRateLimited) {
+        setUpdateStatus("updates.rateLimited", "error", { time: formatGithubRateLimitReset(githubError.rateLimitResetEpochSeconds) });
+        return;
+      }
+      throw new Error(githubError.message);
     }
 
     const latestRelease = parseLatestRelease(await response.json());
@@ -937,6 +952,19 @@ function logEvent(message: string) {
   while (elements.events.children.length > 8) {
     elements.events.lastElementChild?.remove();
   }
+}
+
+function formatGithubRateLimitReset(epochSeconds?: number) {
+  if (!epochSeconds) {
+    return t("updates.later");
+  }
+
+  return new Intl.DateTimeFormat(state.language === "zh" ? "zh-CN" : "en", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(epochSeconds * 1000));
 }
 
 function formatDuration(seconds: number) {

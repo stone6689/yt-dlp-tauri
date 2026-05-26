@@ -5,6 +5,14 @@ export type LatestRelease = {
 
 export type GithubAccessMode = "direct" | "gh-proxy";
 
+export type GithubHttpError = {
+  status: number;
+  statusText: string;
+  message: string;
+  isRateLimited: boolean;
+  rateLimitResetEpochSeconds?: number;
+};
+
 export type UpdateStatus =
   | {
       kind: "available";
@@ -82,6 +90,22 @@ export function resolveGithubUrl(url: string, accessMode: GithubAccessMode) {
   return `https://gh-proxy.com/${url}`;
 }
 
+export async function parseGithubHttpError(response: Response): Promise<GithubHttpError> {
+  const statusLine = `${response.status} ${response.statusText}`.trim();
+  const apiMessage = await readGithubApiMessage(response);
+  const remaining = response.headers.get("x-ratelimit-remaining");
+  const resetEpochSeconds = parseRateLimitReset(response.headers.get("x-ratelimit-reset"));
+  const isRateLimited = response.status === 403 && remaining === "0";
+
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    message: apiMessage ? `${statusLine}: ${apiMessage}` : statusLine,
+    isRateLimited,
+    rateLimitResetEpochSeconds: isRateLimited ? resetEpochSeconds : undefined,
+  };
+}
+
 function normalizeVersion(version: string) {
   return version.trim().replace(/^v/i, "").split(/[+-]/)[0] || "0";
 }
@@ -91,4 +115,25 @@ function versionParts(version: string) {
     .split(".")
     .map((part) => Number.parseInt(part, 10))
     .map((part) => (Number.isFinite(part) ? part : 0));
+}
+
+async function readGithubApiMessage(response: Response) {
+  try {
+    const payload = (await response.clone().json()) as unknown;
+    if (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).message === "string") {
+      return (payload as Record<string, string>).message;
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function parseRateLimitReset(value: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  const epochSeconds = Number.parseInt(value, 10);
+  return Number.isFinite(epochSeconds) ? epochSeconds : undefined;
 }
