@@ -92,7 +92,7 @@ h3 {
   width: 100%;
   max-width: 1072px;
   margin: 0 auto;
-  padding: 24px 16px 34px;
+  padding: 20px 16px 24px;
 }
 
 .topbar {
@@ -100,7 +100,7 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 
 .brand-lockup {
@@ -232,27 +232,20 @@ label {
   display: grid;
   width: 100%;
   min-width: 0;
-  gap: 20px;
+  gap: 16px;
   border: 1px solid color-mix(in oklch, var(--stroke), var(--surface) 30%);
   border-radius: 12px;
   background: color-mix(in oklch, var(--surface), transparent 2%);
   box-shadow: var(--shadow);
-  padding: 24px;
+  padding: 22px;
 }
 
 .surface-header {
   display: flex;
   min-width: 0;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
-}
-
-.surface-header p {
-  max-width: 58ch;
-  margin-top: 6px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
 }
 
 .notice {
@@ -298,7 +291,7 @@ label {
   display: grid;
   min-width: 0;
   grid-template-columns: minmax(260px, 38%) minmax(0, 1fr);
-  gap: 20px;
+  gap: 18px;
   align-items: start;
 }
 
@@ -363,19 +356,19 @@ label {
 
 #video-description {
   display: -webkit-box;
-  margin-top: 12px;
+  margin-top: 10px;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 3;
 }
 
 .download-panel {
   display: grid;
   min-width: 0;
   grid-template-columns: minmax(220px, 1fr) auto;
-  gap: 12px;
+  gap: 10px 12px;
   align-items: end;
-  padding-top: 4px;
+  padding-top: 2px;
 }
 
 .quality-field {
@@ -462,6 +455,27 @@ progress::-webkit-progress-value {
 .settings-section-header p {
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+#app-version {
+  color: var(--text);
+  font-weight: 680;
+}
+
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px 18px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.settings-footer .button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 0.84rem;
 }
 
 .split-actions,

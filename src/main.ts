@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import packageInfo from "../package.json";
 
 type ToolStatus = {
   name: string;
@@ -48,12 +50,14 @@ type ToolInstallProgress = {
   tool?: string;
 };
 
+const APP_VERSION = packageInfo.version;
+const PROJECT_REPOSITORY_URL = "https://github.com/Chlience/yt-dlp-tauri";
+
 const translations = {
   en: {
     "app.title": "yt-dlp-tauri",
     "app.eyebrow": "Desktop downloader",
     "app.heading": "Paste, choose, download.",
-    "app.subtitle": "Tools, folder, and logs live in settings.",
     "language.label": "Language",
     "action.settings": "Settings",
     "action.close": "Close",
@@ -67,6 +71,7 @@ const translations = {
     "action.refresh": "Refresh",
     "action.installTools": "Install tools",
     "action.repairTools": "Repair tools",
+    "action.github": "GitHub",
     "url.label": "Video URL",
     "url.placeholder": "https://www.youtube.com/watch?v=...",
     "preview.thumbnailAlt": "video thumbnail",
@@ -118,6 +123,7 @@ const translations = {
     "settings.toolInstallFailed": "Tool install failed.",
     "settings.activity": "Activity",
     "settings.activityHint": "Recent local events.",
+    "settings.version": "Version",
     "settings.chooseFolder": "Choose download folder",
     "event.booted": "App booted.",
     "event.toolsAvailable": "yt-dlp, ffmpeg, ffprobe and deno are available.",
@@ -137,7 +143,6 @@ const translations = {
     "app.title": "yt-dlp-tauri",
     "app.eyebrow": "桌面下载器",
     "app.heading": "粘贴，选择，下载。",
-    "app.subtitle": "工具链、目录和日志放在设置里。",
     "language.label": "语言",
     "action.settings": "设置",
     "action.close": "关闭",
@@ -151,6 +156,7 @@ const translations = {
     "action.refresh": "刷新",
     "action.installTools": "安装工具",
     "action.repairTools": "修复工具",
+    "action.github": "GitHub",
     "url.label": "视频链接",
     "url.placeholder": "https://www.youtube.com/watch?v=...",
     "preview.thumbnailAlt": "视频缩略图",
@@ -202,6 +208,7 @@ const translations = {
     "settings.toolInstallFailed": "工具安装失败。",
     "settings.activity": "活动",
     "settings.activityHint": "最近的本地事件。",
+    "settings.version": "版本",
     "settings.chooseFolder": "选择下载目录",
     "event.booted": "应用已启动。",
     "event.toolsAvailable": "yt-dlp、ffmpeg、ffprobe 和 deno 均可用。",
@@ -251,6 +258,8 @@ const elements = {
   browseFolder: must<HTMLButtonElement>("#browse-folder"),
   resetFolder: must<HTMLButtonElement>("#reset-folder"),
   saveFolder: must<HTMLButtonElement>("#save-folder"),
+  githubLink: must<HTMLButtonElement>("#github-link"),
+  appVersion: must<HTMLElement>("#app-version"),
   folderInput: must<HTMLInputElement>("#folder-input"),
   folderText: must<HTMLElement>("#folder-text"),
   toolRoot: must<HTMLElement>("#tool-root"),
@@ -336,6 +345,7 @@ function applyTranslations() {
   elements.languageZh.classList.toggle("is-active", state.language === "zh");
   elements.languageEn.setAttribute("aria-pressed", String(state.language === "en"));
   elements.languageZh.setAttribute("aria-pressed", String(state.language === "zh"));
+  elements.appVersion.textContent = APP_VERSION;
   updateInstallButtonLabel();
 }
 
@@ -376,6 +386,7 @@ function bindEvents() {
   elements.browseFolder.addEventListener("click", () => void browseDownloadFolder());
   elements.saveFolder.addEventListener("click", () => void saveDownloadFolder());
   elements.resetFolder.addEventListener("click", () => void resetDownloadFolder());
+  elements.githubLink.addEventListener("click", () => void openProjectRepository());
   elements.quality.addEventListener("change", () => {
     state.selectedFormat = state.metadata?.format_options[elements.quality.selectedIndex] ?? null;
     updateButtons();
@@ -548,6 +559,14 @@ async function cancelCurrentDownload() {
 async function openDownloadFolder() {
   try {
     await invoke("open_download_directory");
+  } catch (error) {
+    showNotice(String(error), "error");
+  }
+}
+
+async function openProjectRepository() {
+  try {
+    await openUrl(PROJECT_REPOSITORY_URL);
   } catch (error) {
     showNotice(String(error), "error");
   }
