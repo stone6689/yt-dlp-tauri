@@ -1,44 +1,59 @@
-# yt-dlp-tauri
+<h1 align="center">yt-dlp-tauri</h1>
 
-A minimal Tauri 2 desktop app for downloading videos with `yt-dlp`. Paste a URL, preview metadata, choose a quality, and download an MP4-friendly file without using the command line.
+<p align="center">
+  <strong>A minimal Windows desktop downloader powered by yt-dlp and Tauri 2.</strong>
+</p>
 
-[中文](./README_zh.md)
+<p align="center">
+  <a href="./README_zh.md">中文</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#verification">Verification</a> ·
+  <a href="#documentation">Documentation</a>
+</p>
+
+<p align="center">
+  <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri" />
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-backend-B7410E?logo=rust" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-typed-3178C6?logo=typescript" />
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite" />
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-first-0078D4?logo=windows" />
+</p>
+
+---
+
+## What is yt-dlp-tauri?
+
+`yt-dlp-tauri` is a small desktop app for downloading videos with `yt-dlp` without writing command-line options by hand. Paste a video URL, preview the metadata, choose a quality, and download an MP4-friendly file from a focused Windows UI.
+
+The project is Windows-first and local-first. It is not a hosted downloader service, does not provide multi-user accounts, and is not affiliated with `yt-dlp`, FFmpeg, Deno, or Tauri.
 
 ## Features
 
-- Parse video metadata through `yt-dlp`.
-- Show title, thumbnail, source URL, duration, description, and quality options.
-- Download with live progress, speed, ETA, and cancellation.
-- Choose, save, reset, and open the output folder.
-- Install or repair the current target's toolchain from inside the app.
-- Verify installed tools with SHA-256 hashes from a pinned manifest.
-- Switch the interface between English and Chinese.
-- Keep local operational logs.
+- Parse video metadata through `yt-dlp` and preview title, thumbnail, duration, source URL, description, and quality options.
+- Download with live progress, speed, ETA, cancellation, and a saved output folder.
+- Install, repair, and verify the app-managed Windows toolchain from Settings.
+- Verify tools against fixed source URLs and SHA-256 hashes from a pinned manifest.
+- Switch the UI between English and Chinese.
+- Check GitHub Releases for app updates, with optional `gh-proxy` routing for update and release access.
+- Keep local operational logs for recent app activity.
 
-## Status
-
-This project is ready for public source release, but the release packaging path is still intentionally narrow:
-
-- Current populated tool target: `win-x64`.
-- Planned manifest target: `win-arm64`, once every tool URL and hash is pinned.
-- Bundle target: NSIS installer.
-- Tool binaries are not committed to the repository. The app installs them into the app data tool cache, and development checkouts can restore them with `scripts/download-tools.ps1`.
-
-## Stack
+## Tech Stack
 
 | Layer | Choice |
 | --- | --- |
 | Desktop runtime | Tauri 2 |
 | Backend | Rust |
-| Frontend | Vanilla TypeScript + Vite |
-| UI | Product-style desktop interface |
+| Frontend | Vanilla TypeScript, Vite |
+| UI | Fixed-size product-style desktop interface |
 | Toolchain | App-managed Windows `yt-dlp.exe`, `ffmpeg.exe`, `ffprobe.exe`, `deno.exe` |
+| Installer | NSIS bundle target |
 
-## Build From Source
+## Quick Start
 
 Use Windows for real app builds. WSL can run many checks, but release installers should be built on Windows with the MSVC Rust toolchain.
 
-Prerequisites:
+### 1. Install prerequisites
 
 - Windows 10/11
 - WebView2 Runtime
@@ -46,35 +61,91 @@ Prerequisites:
 - Rust stable with the MSVC toolchain
 - PowerShell 5+ or PowerShell 7+
 
-Install dependencies:
+### 2. Install dependencies
 
 ```powershell
-npm install
+npm ci
 ```
 
-Optional: pre-restore tools for a development checkout:
+### 3. Optional: restore development tools
 
 ```powershell
 .\scripts\download-tools.ps1
 ```
 
-This step is optional for normal app use. If tools are missing, open the app, go to Settings, and click `Install tools`.
+This is optional for normal app use. If tools are missing, open the app, go to Settings, and click `Install tools`.
 
-Run in development:
+### 4. Run the desktop app in development
 
 ```powershell
 npm run tauri dev
 ```
 
-Build an installer:
+### 5. Build the Windows installer
 
 ```powershell
 npm run tauri build
 ```
 
-The configured bundle target is `nsis`; output is written under `src-tauri\target\release\bundle\nsis\`.
+The configured bundle target is `nsis`. Build output is written under:
+
+```text
+src-tauri\target\release\bundle\nsis\
+```
+
+## Configuration
+
+| Item | Purpose |
+| --- | --- |
+| `src-tauri/tools-manifest.json` | Fixed tool versions, source URLs, target names, and SHA-256 hashes. |
+| `src-tauri/tauri.conf.json` | Tauri app metadata, fixed window size, bundle target, icons, and resources. |
+| `scripts/download-tools.ps1` | Optional development script that restores the pinned `win-x64` toolchain into the checkout. |
+| Settings: output folder | User-facing download directory selection, save, reset, and open actions. |
+| Settings: GitHub site | `Direct` or `gh-proxy` mode for update checks and release links. Project home always opens GitHub directly. |
+
+Current release scope:
+
+- Populated tool target: `win-x64`.
+- Planned manifest target: `win-arm64`, once every tool URL and hash is pinned.
+- Tool binaries are not committed to the repository.
+
+## Data, Storage, and Output
+
+Downloaded videos default to:
+
+```text
+%USERPROFILE%\Downloads\yt-dlp-tauri\
+```
+
+App state and logs are stored under:
+
+```text
+%LOCALAPPDATA%\yt-dlp-tauri\state\
+%LOCALAPPDATA%\yt-dlp-tauri\logs\app.log
+```
+
+Installed app tools are written under:
+
+```text
+%LOCALAPPDATA%\yt-dlp-tauri\Tools\win-x64\
+```
+
+Development checkout tools can live at:
+
+```text
+src-tauri\Tools\win-x64\yt-dlp\yt-dlp.exe
+src-tauri\Tools\win-x64\ffmpeg\bin\ffmpeg.exe
+src-tauri\Tools\win-x64\ffmpeg\bin\ffprobe.exe
+src-tauri\Tools\win-x64\deno\deno.exe
+```
 
 ## Verification
+
+Frontend tests:
+
+```powershell
+npm test
+```
 
 Frontend build:
 
@@ -94,51 +165,21 @@ Rust backend check:
 cargo check --manifest-path .\src-tauri\Cargo.toml
 ```
 
-## Runtime Data
+Full Tauri build:
 
-Downloaded videos default to:
-
-```text
-%USERPROFILE%\Downloads\yt-dlp-tauri\
+```powershell
+npm run tauri build
 ```
 
-App state and logs are stored under:
+## Documentation
 
-```text
-%LOCALAPPDATA%\yt-dlp-tauri\state\
-%LOCALAPPDATA%\yt-dlp-tauri\logs\app.log
-```
+- [Changelog](./CHANGELOG.md)
+- [Contributing](./CONTRIBUTING.md)
+- [Security policy](./SECURITY.md)
+- [Third-party notices](./THIRD-PARTY-NOTICES.md)
+- [Tool manifest](./src-tauri/tools-manifest.json)
 
-Development checkout tools can live at:
-
-```text
-src-tauri\Tools\win-x64\yt-dlp\yt-dlp.exe
-src-tauri\Tools\win-x64\ffmpeg\bin\ffmpeg.exe
-src-tauri\Tools\win-x64\ffmpeg\bin\ffprobe.exe
-src-tauri\Tools\win-x64\deno\deno.exe
-```
-
-Installed app tools are written under the app data directory instead:
-
-```text
-%LOCALAPPDATA%\yt-dlp-tauri\Tools\win-x64\
-```
-
-Versions, source URLs, target names, and SHA-256 hashes are tracked in [`src-tauri/tools-manifest.json`](./src-tauri/tools-manifest.json).
-
-## Project Layout
-
-```text
-index.html                    app shell markup
-src/main.ts                   Tauri command wiring, i18n, and UI state
-src/styles.css                desktop UI styling
-src-tauri/src/lib.rs          Rust backend commands and yt-dlp process control
-src-tauri/tauri.conf.json     Tauri app and bundle configuration
-scripts/download-tools.ps1    optional development restore script
-THIRD-PARTY-NOTICES.md        third-party tool sources and redistribution notes
-```
-
-## Release Notes
+## Release Checklist
 
 Before publishing a release:
 
@@ -150,6 +191,6 @@ Before publishing a release:
 
 ## Legal
 
-This project is licensed under GPL-3.0. The app downloads and uses third-party command-line tools with their own licenses and redistribution obligations. See [`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md).
+This project is licensed under GPL-3.0. The app downloads and uses third-party command-line tools with their own licenses and redistribution obligations. See [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md).
 
 This project is not affiliated with `yt-dlp`, FFmpeg, Deno, or Tauri.
