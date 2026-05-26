@@ -16,8 +16,10 @@
         "title": "yt-dlp-tauri",
         "width": 1180,
         "height": 820,
-        "minWidth": 980,
-        "minHeight": 700
+        "minWidth": 1180,
+        "minHeight": 820,
+        "resizable": false,
+        "maximizable": false
       }
     ],
     "security": {
