@@ -82,7 +82,7 @@ jobs:
         run: node .github/scripts/extract-release-notes.mjs --version "${{ env.RELEASE_TAG }}" --output release-notes.md
 
       - name: Build and draft release
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -91,6 +91,6 @@ jobs:
           releaseBody: ${{ steps.release-notes.outputs.release_body }}
           releaseDraft: true
           prerelease: false
-          uploadUpdaterJson: false
-          releaseAssetNamePattern: "[name]_[version]_[platform]_[arch][setup].[ext]"
+          includeUpdaterJson: false
+          assetNamePattern: "[name]_[version]_[platform]_[arch][setup].[ext]"
           args: ${{ matrix.tauri-args }}
