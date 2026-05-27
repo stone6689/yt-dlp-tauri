@@ -20,6 +20,10 @@
   <img alt="Windows" src="https://img.shields.io/badge/Windows-first-0078D4?logo=windows" />
 </p>
 
+<p align="center">
+  <img alt="yt-dlp-tauri 中文界面" src="./docs/assets/readme-zh.png" width="920" />
+</p>
+
 ---
 
 ## 项目是什么？

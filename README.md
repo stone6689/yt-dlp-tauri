@@ -20,6 +20,10 @@
   <img alt="Windows" src="https://img.shields.io/badge/Windows-first-0078D4?logo=windows" />
 </p>
 
+<p align="center">
+  <img alt="yt-dlp-tauri English interface" src="./docs/assets/readme-en.png" width="920" />
+</p>
+
 ---
 
 ## What is yt-dlp-tauri?
