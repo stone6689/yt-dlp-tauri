@@ -36,6 +36,7 @@ The project is desktop-first and local-first. It is not a hosted downloader serv
 
 - Parse video metadata through `yt-dlp` and preview title, thumbnail, duration, source URL, description, and quality options.
 - Download with live progress, speed, ETA, cancellation, and a saved output folder.
+- Use Cookie files for authenticated sites, including Netscape `cookies.txt` and one-line browser Cookie headers.
 - Install, repair, and verify the app-managed platform toolchain from Settings.
 - Verify tools against fixed source URLs and SHA-256 hashes from a pinned manifest.
 - Switch the UI between English and Chinese.

@@ -75,7 +75,7 @@ const translations = {
     "action.browse": "Browse",
     "action.save": "Save",
     "action.reset": "Reset",
-    "action.chooseCookies": "Choose cookies.txt",
+    "action.chooseCookies": "Choose Cookie file",
     "action.clearCookies": "Clear",
     "action.refresh": "Refresh",
     "action.installTools": "Install tools",
@@ -90,7 +90,7 @@ const translations = {
     "url.placeholder": "https://www.youtube.com/watch?v=...",
     "cookies.label": "Cookie file",
     "cookies.none": "No cookies",
-    "cookies.chooseFile": "Choose cookies.txt",
+    "cookies.chooseFile": "Choose Cookie file",
     "preview.thumbnailAlt": "video thumbnail",
     "preview.emptyImage": "Preview",
     "preview.label": "Preview",
@@ -186,7 +186,7 @@ const translations = {
     "action.browse": "浏览",
     "action.save": "保存",
     "action.reset": "重置",
-    "action.chooseCookies": "选择 cookies.txt",
+    "action.chooseCookies": "选择 Cookie 文件",
     "action.clearCookies": "清除",
     "action.refresh": "刷新",
     "action.installTools": "安装工具",
@@ -201,7 +201,7 @@ const translations = {
     "url.placeholder": "https://www.youtube.com/watch?v=...",
     "cookies.label": "Cookie 文件",
     "cookies.none": "未使用 Cookie",
-    "cookies.chooseFile": "选择 cookies.txt",
+    "cookies.chooseFile": "选择 Cookie 文件",
     "preview.thumbnailAlt": "视频缩略图",
     "preview.emptyImage": "预览",
     "preview.label": "预览",
@@ -788,7 +788,6 @@ async function chooseCookiesFile() {
       directory: false,
       multiple: false,
       defaultPath: state.cookiesFile || undefined,
-      filters: [{ name: "cookies.txt", extensions: ["txt"] }],
     });
 
     if (typeof selected === "string") {

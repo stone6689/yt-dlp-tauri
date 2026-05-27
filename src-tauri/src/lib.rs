@@ -19,6 +19,7 @@ const TOOLS_DIRECTORY: &str = "Tools";
 const TOOLS_MANIFEST_FILE: &str = "tools-manifest.json";
 const PROGRESS_PREFIX: &str = "yt-dlp-tauri-progress:";
 const OUTPUT_PATH_PREFIX: &str = "yt-dlp-tauri-output:";
+const COOKIE_HEADER_EXPIRY: &str = "2147483647";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -145,6 +146,25 @@ enum ManifestToolKind {
 struct DownloadProcessState {
     active_pid: Arc<Mutex<Option<u32>>>,
     cancel_requested: Arc<Mutex<bool>>,
+}
+
+struct PreparedCookiesFile {
+    path: PathBuf,
+    temporary: bool,
+}
+
+impl PreparedCookiesFile {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PreparedCookiesFile {
+    fn drop(&mut self) {
+        if self.temporary {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 #[tauri::command]
@@ -348,7 +368,7 @@ async fn parse_metadata(app: AppHandle, url: String) -> Result<VideoMetadata, St
         validate_http_url(&url)?;
         let tools = locate_tools(&app)?;
         require_tools(&tools)?;
-        let cookies_file = validated_cookies_file()?;
+        let cookies_file = prepared_cookies_file_for_url(&url)?;
         append_log("metadata", &format!("Parsing {url}"));
 
         let mut command = background_command(&tools.yt_dlp);
@@ -362,7 +382,9 @@ async fn parse_metadata(app: AppHandle, url: String) -> Result<VideoMetadata, St
             .arg(&tools.ffmpeg_dir)
             .args(["--js-runtimes"])
             .arg(format!("deno:{}", tools.deno.display()))
-            .args(yt_dlp_cookie_args(cookies_file.as_deref()))
+            .args(yt_dlp_cookie_args(
+                cookies_file.as_ref().map(PreparedCookiesFile::path),
+            ))
             .arg(&url)
             .output()
             .map_err(|error| {
@@ -402,7 +424,7 @@ async fn download_video(
         require_tools(&tools)?;
         ensure_writable_directories()?;
         let output_dir = download_directory()?;
-        let cookies_file = validated_cookies_file()?;
+        let cookies_file = prepared_cookies_file_for_url(&request.url)?;
         append_log("download", &format!("Starting {} {}", request.label, request.url));
 
         let mut command = background_command(&tools.yt_dlp);
@@ -424,7 +446,9 @@ async fn download_video(
             .arg(&tools.ffmpeg_dir)
             .args(["--js-runtimes"])
             .arg(format!("deno:{}", tools.deno.display()))
-            .args(yt_dlp_cookie_args(cookies_file.as_deref()))
+            .args(yt_dlp_cookie_args(
+                cookies_file.as_ref().map(PreparedCookiesFile::path),
+            ))
             .args([
                 "--progress-template",
                 &format!(
@@ -1487,13 +1511,12 @@ fn cookies_file() -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
-fn validated_cookies_file() -> Result<Option<PathBuf>, String> {
+fn prepared_cookies_file_for_url(url: &str) -> Result<Option<PreparedCookiesFile>, String> {
     let Some(path) = cookies_file()? else {
         return Ok(None);
     };
 
-    validate_cookies_file_path(&path)?;
-    Ok(Some(path))
+    prepare_cookies_file_path_for_url(&path, url).map(Some)
 }
 
 fn validate_cookies_file_path(path: &Path) -> Result<(), String> {
@@ -1506,6 +1529,47 @@ fn validate_cookies_file_path(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("Cookie file cannot be opened: {}: {error}", path.display()))
 }
 
+fn prepare_cookies_file_path_for_url(
+    path: &Path,
+    url: &str,
+) -> Result<PreparedCookiesFile, String> {
+    validate_cookies_file_path(path)?;
+    let content = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "Cookie file cannot be read as text: {}: {error}",
+            path.display()
+        )
+    })?;
+
+    if is_netscape_cookie_content(&content) {
+        return Ok(PreparedCookiesFile {
+            path: path.to_path_buf(),
+            temporary: false,
+        });
+    }
+
+    if !looks_like_cookie_header_content(&content) {
+        return Err(
+            "Cookie file must be Netscape cookies.txt or a one-line Cookie header such as `a=b; c=d`."
+                .to_string(),
+        );
+    }
+
+    let converted = cookie_header_to_netscape_content(url, &content)?;
+    let converted_path = temp_cookies_file_path();
+    fs::write(&converted_path, converted).map_err(|error| {
+        format!(
+            "Failed to prepare temporary Cookie header file at {}: {error}",
+            converted_path.display()
+        )
+    })?;
+
+    Ok(PreparedCookiesFile {
+        path: converted_path,
+        temporary: true,
+    })
+}
+
 fn cookies_file_state_path() -> Result<PathBuf, String> {
     Ok(state_directory()?.join("cookies-file.txt"))
 }
@@ -1514,6 +1578,168 @@ fn yt_dlp_cookie_args(cookies_file: Option<&Path>) -> Vec<String> {
     cookies_file
         .map(|path| vec!["--cookies".to_string(), path.display().to_string()])
         .unwrap_or_default()
+}
+
+fn is_netscape_cookie_content(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return false;
+        }
+
+        line.split('\t').count() == 7
+    })
+}
+
+fn looks_like_cookie_header_content(content: &str) -> bool {
+    parse_cookie_header_pairs(content)
+        .map(|pairs| !pairs.is_empty())
+        .unwrap_or(false)
+}
+
+fn cookie_header_to_netscape_content(url: &str, content: &str) -> Result<String, String> {
+    let (domain, include_subdomains) = cookie_domain_for_url(url)?;
+    let include_subdomains = if include_subdomains { "TRUE" } else { "FALSE" };
+    let secure = if url.starts_with("https://") {
+        "TRUE"
+    } else {
+        "FALSE"
+    };
+    let pairs = parse_cookie_header_pairs(content)?;
+    if pairs.is_empty() {
+        return Err("Cookie header file does not contain any cookie pairs.".to_string());
+    }
+
+    let mut lines = vec![
+        "# Netscape HTTP Cookie File".to_string(),
+        "# Generated by yt-dlp-tauri from a Cookie header file.".to_string(),
+    ];
+
+    for (name, value) in pairs {
+        lines.push(format!(
+            "{domain}\t{include_subdomains}\t/\t{secure}\t{COOKIE_HEADER_EXPIRY}\t{name}\t{value}"
+        ));
+    }
+    lines.push(String::new());
+    Ok(lines.join("\n"))
+}
+
+fn parse_cookie_header_pairs(content: &str) -> Result<Vec<(String, String)>, String> {
+    let joined = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let header = strip_cookie_header_prefix(&joined).trim();
+    if !header.contains('=') {
+        return Err("Cookie header file does not contain `name=value` pairs.".to_string());
+    }
+
+    let mut pairs = Vec::new();
+    for part in header.split(';') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        let Some((name, value)) = part.split_once('=') else {
+            return Err(format!("Cookie header entry is missing `=`: {part}"));
+        };
+        let name = name.trim();
+        if name.is_empty() || !is_safe_cookie_field(name) {
+            return Err(format!(
+                "Cookie header contains an invalid cookie name: {name}"
+            ));
+        }
+        if !is_safe_cookie_field(value) {
+            return Err(format!(
+                "Cookie header contains an invalid value for {name}."
+            ));
+        }
+
+        pairs.push((name.to_string(), value.trim().to_string()));
+    }
+
+    Ok(pairs)
+}
+
+fn strip_cookie_header_prefix(content: &str) -> &str {
+    let trimmed = content.trim_start();
+    if trimmed
+        .get(..7)
+        .map(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+        .unwrap_or(false)
+    {
+        &trimmed[7..]
+    } else {
+        trimmed
+    }
+}
+
+fn is_safe_cookie_field(value: &str) -> bool {
+    !value
+        .chars()
+        .any(|character| character == '\t' || character == '\r' || character == '\n')
+}
+
+fn cookie_domain_for_url(url: &str) -> Result<(String, bool), String> {
+    let host = http_url_host(url)
+        .ok_or_else(|| "Unable to determine host for Cookie header conversion.".to_string())?;
+    if host == "localhost" || host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok((host, false));
+    }
+
+    let labels = host
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if labels.len() < 2 {
+        return Ok((host, false));
+    }
+
+    let base = if labels.len() > 2 && labels.first().is_some_and(|label| *label == "www") {
+        labels[1..].join(".")
+    } else if labels.len() > 2 {
+        labels[labels.len() - 2..].join(".")
+    } else {
+        host
+    };
+
+    Ok((format!(".{base}"), true))
+}
+
+fn http_url_host(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit('@')
+        .next()
+        .unwrap_or_default();
+    if authority.starts_with('[') {
+        return authority
+            .split_once(']')
+            .map(|(host, _)| host.trim_start_matches('[').to_ascii_lowercase());
+    }
+
+    authority
+        .split(':')
+        .next()
+        .filter(|host| !host.trim().is_empty())
+        .map(|host| host.trim().to_ascii_lowercase())
+}
+
+fn temp_cookies_file_path() -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    env::temp_dir().join(format!(
+        "yt-dlp-tauri-cookies-{}-{stamp}.txt",
+        std::process::id()
+    ))
 }
 
 fn default_download_directory() -> PathBuf {
@@ -1806,6 +2032,50 @@ mod tests {
             args,
             vec!["--cookies".to_string(), "account-cookies.txt".to_string()]
         );
+    }
+
+    #[test]
+    fn converts_cookie_header_file_content_to_netscape_cookie_content() {
+        let content = cookie_header_to_netscape_content(
+            "https://www.bilibili.com/video/BV1test",
+            "Cookie: buvid3=abc; bili_jct=token_value; CURRENT_FNVAL=2000",
+        )
+        .expect("cookie header should convert");
+
+        assert_eq!(
+            content,
+            [
+                "# Netscape HTTP Cookie File",
+                "# Generated by yt-dlp-tauri from a Cookie header file.",
+                ".bilibili.com\tTRUE\t/\tTRUE\t2147483647\tbuvid3\tabc",
+                ".bilibili.com\tTRUE\t/\tTRUE\t2147483647\tbili_jct\ttoken_value",
+                ".bilibili.com\tTRUE\t/\tTRUE\t2147483647\tCURRENT_FNVAL\t2000",
+                "",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn converts_bare_cookie_header_file_content_to_netscape_cookie_content() {
+        let content = cookie_header_to_netscape_content(
+            "https://www.bilibili.com/video/BV1test",
+            "buvid3=abc; bili_jct=token_value",
+        )
+        .expect("bare cookie header should convert");
+
+        assert!(content.contains(".bilibili.com\tTRUE\t/\tTRUE\t2147483647\tbuvid3\tabc"));
+        assert!(content.contains(".bilibili.com\tTRUE\t/\tTRUE\t2147483647\tbili_jct\ttoken_value"));
+    }
+
+    #[test]
+    fn detects_netscape_cookie_content() {
+        assert!(is_netscape_cookie_content(
+            "# Netscape HTTP Cookie File\n.bilibili.com\tTRUE\t/\tFALSE\t0\tbuvid3\tabc\n"
+        ));
+        assert!(!is_netscape_cookie_content(
+            "buvid3=abc; bili_jct=token_value"
+        ));
     }
 
     #[test]

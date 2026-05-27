@@ -36,6 +36,7 @@
 
 - 通过 `yt-dlp` 解析视频信息，并预览标题、封面、时长、来源 URL、描述和清晰度选项。
 - 下载时显示实时进度、速度、ETA，支持取消，并保存输出目录。
+- 为需要登录态的站点选择 Cookie 文件，支持 Netscape `cookies.txt` 和一行浏览器 Cookie 请求头。
 - 在 Settings 中安装、修复和校验应用管理的平台工具链。
 - 按固定 source URL 和 SHA-256 哈希校验工具，来源记录在 pinned manifest 中。
 - 支持中英文界面切换。

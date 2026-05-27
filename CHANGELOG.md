@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.1.5 - 2026-05-27
+
+### 中文
+
+- Cookie 文件支持标准 Netscape `cookies.txt`，也支持从浏览器请求头复制的一行 `Cookie: a=b; c=d` 或 `a=b; c=d`。
+
+### English
+
+- Cookie files now support standard Netscape `cookies.txt` plus one-line browser Cookie headers such as `Cookie: a=b; c=d` or `a=b; c=d`.
+
 ## 0.1.4 - 2026-05-27
 
 ### 中文
