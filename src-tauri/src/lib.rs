@@ -17,6 +17,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const TOOLS_DIRECTORY: &str = "Tools";
 const TOOLS_MANIFEST_FILE: &str = "tools-manifest.json";
+const TOOL_DOWNLOAD_MAX_ATTEMPTS: usize = 3;
 const PROGRESS_PREFIX: &str = "yt-dlp-tauri-progress:";
 const OUTPUT_PATH_PREFIX: &str = "yt-dlp-tauri-output:";
 const COOKIE_HEADER_EXPIRY: &str = "2147483647";
@@ -959,28 +960,96 @@ fn download_source_to_file(
         },
     );
 
+    let client = build_tool_download_client(tool_name)?;
+    for attempt in 1..=TOOL_DOWNLOAD_MAX_ATTEMPTS {
+        match download_source_to_file_once(
+            app,
+            &client,
+            source_url,
+            destination,
+            status,
+            tool_name,
+            base_percent,
+            span_percent,
+        ) {
+            Ok(()) => {
+                emit_tool_install_progress(
+                    app,
+                    ToolInstallProgress {
+                        percent: Some((base_percent + span_percent).min(99.0)),
+                        status: format!("Downloaded {tool_name}"),
+                        tool: Some(tool_name.to_string()),
+                    },
+                );
+                return Ok(());
+            }
+            Err(error) if should_retry_tool_download(&error, attempt) => {
+                remove_partial_download(destination);
+                emit_tool_install_progress(
+                    app,
+                    ToolInstallProgress {
+                        percent: Some(base_percent.min(99.0)),
+                        status: format!(
+                            "Retrying {tool_name} download ({}/{})",
+                            attempt + 1,
+                            TOOL_DOWNLOAD_MAX_ATTEMPTS
+                        ),
+                        tool: Some(tool_name.to_string()),
+                    },
+                );
+            }
+            Err(error) => {
+                remove_partial_download(destination);
+                return Err(error.message);
+            }
+        }
+    }
+
+    Err(format!("Failed to download {tool_name} from {source_url}."))
+}
+
+fn build_tool_download_client(tool_name: &str) -> Result<reqwest::blocking::Client, String> {
     install_rustls_crypto_provider();
 
-    let client = reqwest::blocking::Client::builder()
+    reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(60 * 60))
+        .timeout(Duration::from_secs(30 * 60))
         .user_agent(format!("yt-dlp-tauri/{}", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|error| format!("Failed to prepare HTTP client for {tool_name}: {error}"))?;
-    let mut response = client
-        .get(source_url)
-        .send()
-        .map_err(|error| format!("Failed to download {tool_name} from {source_url}: {error}"))?;
-    response
-        .error_for_status_ref()
-        .map_err(|error| format!("Failed to download {tool_name} from {source_url}: {error}"))?;
+        .map_err(|error| format!("Failed to prepare HTTP client for {tool_name}: {error}"))
+}
+
+fn download_source_to_file_once(
+    app: &AppHandle,
+    client: &reqwest::blocking::Client,
+    source_url: &str,
+    destination: &Path,
+    status: &str,
+    tool_name: &str,
+    base_percent: f64,
+    span_percent: f64,
+) -> Result<(), ToolDownloadError> {
+    let mut response = client.get(source_url).send().map_err(|error| {
+        ToolDownloadError::retryable(format!(
+            "Failed to download {tool_name} from {source_url}: {error}"
+        ))
+    })?;
+    let status_code = response.status();
+    if !status_code.is_success() {
+        let message = format!("Failed to download {tool_name} from {source_url}: {status_code}");
+        return if is_retryable_http_status(status_code.as_u16()) {
+            Err(ToolDownloadError::retryable(message))
+        } else {
+            Err(ToolDownloadError::fatal(message))
+        };
+    }
 
     let total_bytes = response.content_length();
     let mut file = fs::File::create(destination).map_err(|error| {
-        format!(
+        ToolDownloadError::fatal(format!(
             "Failed to create download file for {tool_name} at {}: {error}",
             destination.display()
-        )
+        ))
     })?;
     let mut buffer = [0_u8; 64 * 1024];
     let mut downloaded_bytes = 0_u64;
@@ -990,19 +1059,19 @@ fn download_source_to_file(
 
     loop {
         let byte_count = response.read(&mut buffer).map_err(|error| {
-            remove_partial_download(destination);
-            format!("Failed to read HTTP response for {tool_name}: {error}")
+            ToolDownloadError::retryable(format!(
+                "Failed to read HTTP response for {tool_name}: {error}"
+            ))
         })?;
         if byte_count == 0 {
             break;
         }
 
         file.write_all(&buffer[..byte_count]).map_err(|error| {
-            remove_partial_download(destination);
-            format!(
+            ToolDownloadError::fatal(format!(
                 "Failed to write downloaded {tool_name} to {}: {error}",
                 destination.display()
-            )
+            ))
         })?;
         downloaded_bytes += byte_count as u64;
 
@@ -1024,22 +1093,42 @@ fn download_source_to_file(
         }
     }
     file.flush().map_err(|error| {
-        remove_partial_download(destination);
-        format!(
+        ToolDownloadError::fatal(format!(
             "Failed to flush downloaded {tool_name} to {}: {error}",
             destination.display()
-        )
+        ))
     })?;
-
-    emit_tool_install_progress(
-        app,
-        ToolInstallProgress {
-            percent: Some((base_percent + span_percent).min(99.0)),
-            status: format!("Downloaded {tool_name}"),
-            tool: Some(tool_name.to_string()),
-        },
-    );
     Ok(())
+}
+
+#[derive(Debug)]
+struct ToolDownloadError {
+    message: String,
+    retryable: bool,
+}
+
+impl ToolDownloadError {
+    fn retryable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: true,
+        }
+    }
+
+    fn fatal(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+        }
+    }
+}
+
+fn should_retry_tool_download(error: &ToolDownloadError, attempt: usize) -> bool {
+    error.retryable && attempt < TOOL_DOWNLOAD_MAX_ATTEMPTS
+}
+
+fn is_retryable_http_status(status: u16) -> bool {
+    status == 408 || status == 429 || status >= 500
 }
 
 fn install_rustls_crypto_provider() {
@@ -2124,6 +2213,23 @@ mod tests {
         );
         assert_eq!(download_progress_percent(50.0, 30.0, 25, None), None);
         assert_eq!(download_progress_percent(50.0, 30.0, 25, Some(0)), None);
+    }
+
+    #[test]
+    fn retries_retryable_tool_download_errors_until_max_attempts() {
+        let retryable = ToolDownloadError::retryable("network timeout");
+        let fatal = ToolDownloadError::fatal("HTTP 404 Not Found");
+
+        assert!(should_retry_tool_download(&retryable, 1));
+        assert!(should_retry_tool_download(
+            &retryable,
+            TOOL_DOWNLOAD_MAX_ATTEMPTS - 1
+        ));
+        assert!(!should_retry_tool_download(
+            &retryable,
+            TOOL_DOWNLOAD_MAX_ATTEMPTS
+        ));
+        assert!(!should_retry_tool_download(&fatal, 1));
     }
 
     #[test]
