@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.1.10 - 2026-06-24
+
 ### 中文
 
 - 更新后首次启动会弹出当前版本的更新说明，Settings 中也可手动打开更新说明。
