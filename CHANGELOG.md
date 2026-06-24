@@ -2,7 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 0.1.11 - 2026-06-24
+
+### 中文
+
+- 工具更新检查改由 Rust 后端下载 release 附带的 `tools-manifest.json`，避免 WebView 因 GitHub release asset 缺少 CORS 头显示 `Failed to fetch`。
+
+### English
+
+- Moved tool update manifest downloads to the Rust backend so GitHub release assets without CORS headers no longer surface as `Failed to fetch` in the WebView.
 
 ## 0.1.10 - 2026-06-24
 
