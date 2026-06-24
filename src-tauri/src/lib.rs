@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     env,
     ffi::OsStr,
     fs,
@@ -38,6 +38,7 @@ struct ToolStatus {
     full_path: String,
     availability: String,
     version: Option<String>,
+    expected_version: Option<String>,
     error: Option<String>,
 }
 
@@ -89,14 +90,10 @@ struct ToolInstallProgress {
 struct ToolPaths {
     root: PathBuf,
     yt_dlp: PathBuf,
-    yt_dlp_relative_path: String,
     ffmpeg: PathBuf,
-    ffmpeg_relative_path: String,
     ffmpeg_dir: PathBuf,
     ffprobe: PathBuf,
-    ffprobe_relative_path: String,
     deno: PathBuf,
-    deno_relative_path: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -128,7 +125,7 @@ struct ManifestTool {
     path: String,
     source_url: String,
     #[serde(rename = "version")]
-    _version: Option<String>,
+    version: Option<String>,
     sha256: String,
     kind: ManifestToolKind,
     archive_path_suffix: Option<String>,
@@ -271,33 +268,9 @@ async fn open_download_directory() -> Result<(), String> {
 #[tauri::command]
 async fn check_tools(app: AppHandle) -> Result<Vec<ToolStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let tools = locate_tools(&app)?;
-        Ok(vec![
-            probe_tool(
-                "yt-dlp",
-                &tools.yt_dlp_relative_path,
-                &tools.yt_dlp,
-                &["--version"],
-            ),
-            probe_tool(
-                "ffmpeg",
-                &tools.ffmpeg_relative_path,
-                &tools.ffmpeg,
-                &["-version"],
-            ),
-            probe_tool(
-                "ffprobe",
-                &tools.ffprobe_relative_path,
-                &tools.ffprobe,
-                &["-version"],
-            ),
-            probe_tool(
-                "deno",
-                &tools.deno_relative_path,
-                &tools.deno,
-                &["--version"],
-            ),
-        ])
+        let target_name = current_tool_target()?;
+        let target = read_manifest_target(&app, &target_name)?;
+        probe_manifest_tools(&app, &target)
     })
     .await
     .map_err(join_error)?
@@ -331,33 +304,7 @@ async fn install_tools(app: AppHandle) -> Result<Vec<ToolStatus>, String> {
             },
         );
 
-        let tools = locate_tools(&app)?;
-        Ok(vec![
-            probe_tool(
-                "yt-dlp",
-                &tools.yt_dlp_relative_path,
-                &tools.yt_dlp,
-                &["--version"],
-            ),
-            probe_tool(
-                "ffmpeg",
-                &tools.ffmpeg_relative_path,
-                &tools.ffmpeg,
-                &["-version"],
-            ),
-            probe_tool(
-                "ffprobe",
-                &tools.ffprobe_relative_path,
-                &tools.ffprobe,
-                &["-version"],
-            ),
-            probe_tool(
-                "deno",
-                &tools.deno_relative_path,
-                &tools.deno,
-                &["--version"],
-            ),
-        ])
+        probe_manifest_tools(&app, &target)
     })
     .await
     .map_err(join_error)?
@@ -628,14 +575,10 @@ fn locate_tools(app: &AppHandle) -> Result<ToolPaths, String> {
 
     Ok(ToolPaths {
         yt_dlp: root.join("yt-dlp").join(names.yt_dlp),
-        yt_dlp_relative_path: tool_relative_path(&target, &["yt-dlp", names.yt_dlp]),
         ffmpeg: root.join("ffmpeg").join("bin").join(names.ffmpeg),
-        ffmpeg_relative_path: tool_relative_path(&target, &["ffmpeg", "bin", names.ffmpeg]),
         ffmpeg_dir: root.join("ffmpeg").join("bin"),
         ffprobe: root.join("ffmpeg").join("bin").join(names.ffprobe),
-        ffprobe_relative_path: tool_relative_path(&target, &["ffmpeg", "bin", names.ffprobe]),
         deno: root.join("deno").join(names.deno),
-        deno_relative_path: tool_relative_path(&target, &["deno", names.deno]),
         root,
     })
 }
@@ -685,12 +628,6 @@ fn current_tool_target() -> Result<String, String> {
                     )
                 })
         })
-}
-
-fn tool_relative_path(target: &str, segments: &[&str]) -> String {
-    let mut path_segments = vec![TOOLS_DIRECTORY, target];
-    path_segments.extend_from_slice(segments);
-    path_segments.join("/")
 }
 
 fn writable_tools_root(target: &str) -> Result<PathBuf, String> {
@@ -746,42 +683,33 @@ fn install_manifest_target(
     target: &ManifestTarget,
     root: &Path,
 ) -> Result<(), String> {
-    let total_steps = target.tools.len().max(1) as f64;
-    let mut zip_groups = BTreeMap::<String, Vec<ManifestTool>>::new();
+    let mut zip_groups = Vec::<Vec<ManifestTool>>::new();
 
     for tool in &target.tools {
         match tool.kind {
             ManifestToolKind::File => {
-                let step = installed_tool_count(root, &target.tools) as f64;
-                install_file_tool(
-                    app,
-                    root,
-                    tool,
-                    step / total_steps * 100.0,
-                    100.0 / total_steps,
-                )
-                .map_err(|error| format!("Failed to install {}. {error}", tool.name))?;
+                install_file_tool(app, root, tool)
+                    .map_err(|error| format!("Failed to install {}. {error}", tool.name))?;
             }
             ManifestToolKind::Zip => {
-                zip_groups
-                    .entry(tool.source_url.clone())
-                    .or_default()
-                    .push(tool.clone());
+                if let Some(group) = zip_groups.iter_mut().find(|group| {
+                    group
+                        .first()
+                        .map(|first| first.source_url == tool.source_url)
+                        .unwrap_or(false)
+                }) {
+                    group.push(tool.clone());
+                } else {
+                    zip_groups.push(vec![tool.clone()]);
+                }
             }
         }
     }
 
-    for tools in zip_groups.values() {
-        let step = installed_tool_count(root, &target.tools) as f64;
+    for tools in &zip_groups {
         let group_label = zip_group_label(tools);
-        install_zip_tools(
-            app,
-            root,
-            tools,
-            step / total_steps * 100.0,
-            tools.len() as f64 / total_steps * 100.0,
-        )
-        .map_err(|error| format!("Failed to install {group_label}. {error}"))?;
+        install_zip_tools(app, root, tools)
+            .map_err(|error| format!("Failed to install {group_label}. {error}"))?;
     }
 
     for tool in &target.tools {
@@ -798,30 +726,13 @@ fn install_manifest_target(
     Ok(())
 }
 
-fn installed_tool_count(root: &Path, tools: &[ManifestTool]) -> usize {
-    tools
-        .iter()
-        .filter(|tool| {
-            relative_manifest_tool_path(tool)
-                .map(|path| root.join(path).exists())
-                .unwrap_or(false)
-        })
-        .count()
-}
-
-fn install_file_tool(
-    app: &AppHandle,
-    root: &Path,
-    tool: &ManifestTool,
-    base_percent: f64,
-    span_percent: f64,
-) -> Result<(), String> {
+fn install_file_tool(app: &AppHandle, root: &Path, tool: &ManifestTool) -> Result<(), String> {
     let destination = root.join(relative_manifest_tool_path(tool)?);
-    download_to_destination(app, tool, &destination, base_percent, span_percent * 0.82)?;
+    download_to_destination(app, tool, &destination)?;
     emit_tool_install_progress(
         app,
         ToolInstallProgress {
-            percent: Some((base_percent + span_percent * 0.9).min(99.0)),
+            percent: None,
             status: format!("Verifying {}", tool.name),
             tool: Some(tool.name.clone()),
         },
@@ -831,13 +742,7 @@ fn install_file_tool(
     Ok(())
 }
 
-fn install_zip_tools(
-    app: &AppHandle,
-    root: &Path,
-    tools: &[ManifestTool],
-    base_percent: f64,
-    span_percent: f64,
-) -> Result<(), String> {
+fn install_zip_tools(app: &AppHandle, root: &Path, tools: &[ManifestTool]) -> Result<(), String> {
     let first = tools
         .first()
         .ok_or_else(|| "Zip tool group cannot be empty.".to_string())?;
@@ -855,8 +760,6 @@ fn install_zip_tools(
         &zip_path,
         &format!("Downloading {}", zip_group_label(tools)),
         first.name.as_str(),
-        base_percent,
-        span_percent * 0.55,
     )?;
 
     let extract_root = temp_root.join(format!(
@@ -867,12 +770,11 @@ fn install_zip_tools(
     fs::create_dir_all(&extract_root).map_err(to_string)?;
     extract_zip_archive(&zip_path, &extract_root)?;
 
-    for (index, tool) in tools.iter().enumerate() {
-        let offset = index as f64 / tools.len() as f64;
+    for tool in tools {
         emit_tool_install_progress(
             app,
             ToolInstallProgress {
-                percent: Some((base_percent + span_percent * (0.58 + offset * 0.34)).min(99.0)),
+                percent: None,
                 status: format!("Extracting {}", tool.name),
                 tool: Some(tool.name.clone()),
             },
@@ -892,8 +794,6 @@ fn download_to_destination(
     app: &AppHandle,
     tool: &ManifestTool,
     destination: &Path,
-    base_percent: f64,
-    span_percent: f64,
 ) -> Result<(), String> {
     let temp = destination.with_extension("download");
     download_source_to_file(
@@ -902,8 +802,6 @@ fn download_to_destination(
         &temp,
         &format!("Downloading {}", tool.name),
         tool.name.as_str(),
-        base_percent,
-        span_percent,
     )?;
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -940,8 +838,6 @@ fn download_source_to_file(
     destination: &Path,
     status: &str,
     tool_name: &str,
-    base_percent: f64,
-    span_percent: f64,
 ) -> Result<(), String> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -954,7 +850,7 @@ fn download_source_to_file(
     emit_tool_install_progress(
         app,
         ToolInstallProgress {
-            percent: Some(base_percent.min(99.0)),
+            percent: None,
             status: status.to_string(),
             tool: Some(tool_name.to_string()),
         },
@@ -962,21 +858,13 @@ fn download_source_to_file(
 
     let client = build_tool_download_client(tool_name)?;
     for attempt in 1..=TOOL_DOWNLOAD_MAX_ATTEMPTS {
-        match download_source_to_file_once(
-            app,
-            &client,
-            source_url,
-            destination,
-            status,
-            tool_name,
-            base_percent,
-            span_percent,
-        ) {
+        match download_source_to_file_once(app, &client, source_url, destination, status, tool_name)
+        {
             Ok(()) => {
                 emit_tool_install_progress(
                     app,
                     ToolInstallProgress {
-                        percent: Some((base_percent + span_percent).min(99.0)),
+                        percent: Some(100.0),
                         status: format!("Downloaded {tool_name}"),
                         tool: Some(tool_name.to_string()),
                     },
@@ -988,7 +876,7 @@ fn download_source_to_file(
                 emit_tool_install_progress(
                     app,
                     ToolInstallProgress {
-                        percent: Some(base_percent.min(99.0)),
+                        percent: None,
                         status: format!(
                             "Retrying {tool_name} download ({}/{})",
                             attempt + 1,
@@ -1026,8 +914,6 @@ fn download_source_to_file_once(
     destination: &Path,
     status: &str,
     tool_name: &str,
-    base_percent: f64,
-    span_percent: f64,
 ) -> Result<(), ToolDownloadError> {
     let mut response = client.get(source_url).send().map_err(|error| {
         ToolDownloadError::retryable(format!(
@@ -1053,9 +939,18 @@ fn download_source_to_file_once(
     })?;
     let mut buffer = [0_u8; 64 * 1024];
     let mut downloaded_bytes = 0_u64;
-    let mut last_display_percent =
-        download_progress_percent(base_percent, span_percent, 0, total_bytes)
-            .map(display_percent_bucket);
+    let mut last_display_percent = None;
+    if let Some(percent) = download_progress_percent(0, total_bytes) {
+        emit_tool_install_progress(
+            app,
+            ToolInstallProgress {
+                percent: Some(percent),
+                status: status.to_string(),
+                tool: Some(tool_name.to_string()),
+            },
+        );
+        last_display_percent = Some(display_percent_bucket(percent));
+    }
 
     loop {
         let byte_count = response.read(&mut buffer).map_err(|error| {
@@ -1075,9 +970,7 @@ fn download_source_to_file_once(
         })?;
         downloaded_bytes += byte_count as u64;
 
-        if let Some(percent) =
-            download_progress_percent(base_percent, span_percent, downloaded_bytes, total_bytes)
-        {
+        if let Some(percent) = download_progress_percent(downloaded_bytes, total_bytes) {
             let display_percent = display_percent_bucket(percent);
             if Some(display_percent) != last_display_percent {
                 emit_tool_install_progress(
@@ -1135,19 +1028,14 @@ fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-fn download_progress_percent(
-    base_percent: f64,
-    span_percent: f64,
-    downloaded_bytes: u64,
-    total_bytes: Option<u64>,
-) -> Option<f64> {
+fn download_progress_percent(downloaded_bytes: u64, total_bytes: Option<u64>) -> Option<f64> {
     let total_bytes = total_bytes?;
     if total_bytes == 0 {
         return None;
     }
 
     let ratio = (downloaded_bytes as f64 / total_bytes as f64).clamp(0.0, 1.0);
-    Some((base_percent + span_percent * ratio).min(99.0))
+    Some(ratio * 100.0)
 }
 
 fn display_percent_bucket(percent: f64) -> i64 {
@@ -1336,6 +1224,55 @@ fn mark_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn probe_manifest_tools(
+    app: &AppHandle,
+    target: &ManifestTarget,
+) -> Result<Vec<ToolStatus>, String> {
+    let tools = locate_tools(app)?;
+    target
+        .tools
+        .iter()
+        .map(|tool| probe_manifest_tool(&tools.root, tool))
+        .collect()
+}
+
+fn probe_manifest_tool(root: &Path, tool: &ManifestTool) -> Result<ToolStatus, String> {
+    let relative_path = relative_manifest_tool_path(tool)?;
+    let full_path = root.join(relative_path);
+    let mut status = probe_tool(
+        &tool.name,
+        &tool.path,
+        &full_path,
+        tool_version_args(&tool.name),
+    );
+    status.expected_version = tool.version.clone();
+
+    if status.availability == "available" {
+        let hash_matches = verify_sha256(&full_path, &tool.sha256).is_ok();
+        status.availability = availability_for_manifest_probe(&status.availability, hash_matches);
+        if !hash_matches {
+            status.error = Some("Installed tool does not match the pinned manifest.".to_string());
+        }
+    }
+
+    Ok(status)
+}
+
+fn tool_version_args(name: &str) -> &'static [&'static str] {
+    match name {
+        "ffmpeg" | "ffprobe" => &["-version"],
+        _ => &["--version"],
+    }
+}
+
+fn availability_for_manifest_probe(availability: &str, sha_matches: bool) -> String {
+    if availability == "available" && !sha_matches {
+        "outdated".to_string()
+    } else {
+        availability.to_string()
+    }
+}
+
 fn require_tools(tools: &ToolPaths) -> Result<(), String> {
     for path in [&tools.yt_dlp, &tools.ffmpeg, &tools.ffprobe, &tools.deno] {
         if !path.exists() {
@@ -1358,6 +1295,7 @@ fn probe_tool(
             full_path: full_path.display().to_string(),
             availability: "missing".to_string(),
             version: None,
+            expected_version: None,
             error: Some("Bundled tool file is missing.".to_string()),
         };
     }
@@ -1370,6 +1308,7 @@ fn probe_tool(
             full_path: full_path.display().to_string(),
             availability: "available".to_string(),
             version: first_line(&output.stdout),
+            expected_version: None,
             error: None,
         },
         Ok(output) => ToolStatus {
@@ -1378,6 +1317,7 @@ fn probe_tool(
             full_path: full_path.display().to_string(),
             availability: "cannot_execute".to_string(),
             version: None,
+            expected_version: None,
             error: Some(process_failure_message(
                 &format!(
                     "{name} at {} failed to report a version.",
@@ -1394,6 +1334,7 @@ fn probe_tool(
             full_path: full_path.display().to_string(),
             availability: "cannot_execute".to_string(),
             version: None,
+            expected_version: None,
             error: Some(format!(
                 "Failed to run {name} at {}: {error}",
                 full_path.display()
@@ -2075,6 +2016,7 @@ fn join_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn maps_supported_platform_arch_pairs_to_tool_targets() {
@@ -2198,21 +2140,29 @@ mod tests {
     }
 
     #[test]
-    fn maps_downloaded_bytes_to_tool_install_percent() {
+    fn maps_downloaded_bytes_to_current_file_percent() {
+        assert_eq!(download_progress_percent(25, Some(100)), Some(25.0));
+        assert_eq!(download_progress_percent(100, Some(100)), Some(100.0));
+        assert_eq!(download_progress_percent(150, Some(100)), Some(100.0));
+        assert_eq!(download_progress_percent(25, None), None);
+        assert_eq!(download_progress_percent(25, Some(0)), None);
+    }
+
+    #[test]
+    fn marks_available_tool_outdated_when_manifest_hash_mismatches() {
         assert_eq!(
-            download_progress_percent(50.0, 30.0, 25, Some(100)),
-            Some(57.5)
+            availability_for_manifest_probe("available", true),
+            "available"
         );
         assert_eq!(
-            download_progress_percent(50.0, 30.0, 100, Some(100)),
-            Some(80.0)
+            availability_for_manifest_probe("available", false),
+            "outdated"
         );
+        assert_eq!(availability_for_manifest_probe("missing", false), "missing");
         assert_eq!(
-            download_progress_percent(98.0, 10.0, 100, Some(100)),
-            Some(99.0)
+            availability_for_manifest_probe("cannot_execute", false),
+            "cannot_execute"
         );
-        assert_eq!(download_progress_percent(50.0, 30.0, 25, None), None);
-        assert_eq!(download_progress_percent(50.0, 30.0, 25, Some(0)), None);
     }
 
     #[test]

@@ -659,6 +659,10 @@ progress::-webkit-progress-value {
   background: var(--warning);
 }
 
+.tool-row.is-outdated .tool-dot {
+  background: var(--warning);
+}
+
 .tool-name {
   color: var(--text);
   font-weight: 680;
