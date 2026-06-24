@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.1.8 - 2026-06-24
+
+### 中文
+
+- 工具链检查现在会按 `tools-manifest.json` 的 SHA-256 校验本地工具，可识别可运行但已不匹配当前固定清单的旧工具。
+- Settings 中的工具链主按钮会根据状态显示为安装、更新或修复工具。
+- 工具下载进度改为显示当前文件的真实下载百分比，修复 Windows 修复工具链时一开始显示 99% 的问题。
+- 将 GitHub Actions 官方 action 和 CI 构建 Node.js 版本升级到 Node 24。
+
+### English
+
+- Tool checks now verify local tools against the `tools-manifest.json` SHA-256 pins so runnable but stale tools are detected.
+- The Settings toolchain primary action now switches between installing, updating, and repairing tools based on local state.
+- Tool download progress now reports the current file's real download percentage, fixing Windows repair flows that started at 99%.
+- Upgraded GitHub Actions official actions and CI build Node.js to Node 24.
+
 ## 0.1.7 - 2026-06-23
 
 ### 中文
