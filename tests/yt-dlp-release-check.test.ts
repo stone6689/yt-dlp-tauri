@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { evaluateYtDlpManifest } from "../scripts/check-yt-dlp-release.mjs";
+import * as ytDlpReleaseCheck from "../scripts/check-yt-dlp-release.mjs";
+
+const { evaluateYtDlpManifest } = ytDlpReleaseCheck;
 
 const latestRelease = {
   tag_name: "2026.06.09",
@@ -44,4 +46,12 @@ test("stale yt-dlp manifest reports actionable problems", () => {
   assert.match(result.problems.join("\n"), /win-x64 yt-dlp version is 2026\.03\.17, expected 2026\.06\.09/);
   assert.match(result.problems.join("\n"), /win-x64 yt-dlp sourceUrl is stale/);
   assert.match(result.problems.join("\n"), /win-x64 yt-dlp sha256 is stale/);
+});
+
+test("latest yt-dlp release request uses bearer authentication when a token is available", () => {
+  assert.equal(typeof ytDlpReleaseCheck.githubApiHeaders, "function");
+
+  const headers = ytDlpReleaseCheck.githubApiHeaders("github-token");
+
+  assert.equal(headers.Authorization, "Bearer github-token");
 });

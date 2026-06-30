@@ -86,6 +86,21 @@ export function evaluateYtDlpManifest(manifest, latestRelease) {
   };
 }
 
+export function githubApiHeaders(token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "") {
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "yt-dlp-tauri-toolchain-check",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const trimmedToken = token.trim();
+
+  if (trimmedToken) {
+    headers.Authorization = `Bearer ${trimmedToken}`;
+  }
+
+  return headers;
+}
+
 function parseArgs(argv) {
   const args = {
     manifest: DEFAULT_MANIFEST_PATH,
@@ -114,11 +129,7 @@ function parseArgs(argv) {
 
 async function fetchLatestRelease() {
   const response = await fetch(LATEST_RELEASE_API_URL, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "yt-dlp-tauri-toolchain-check",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
+    headers: githubApiHeaders(),
   });
 
   if (!response.ok) {

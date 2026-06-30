@@ -22,6 +22,8 @@ jobs:
           node-version: 24
 
       - name: Check latest yt-dlp release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/check-yt-dlp-release.mjs
 
       - name: Check tool source URLs

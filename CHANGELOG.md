@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### 中文
+
+- Toolchain Freshness 自动任务检查 yt-dlp 最新 release 时会使用 GitHub Actions token 认证请求，避免 GitHub API 未认证限流导致定时任务失败。
+
+### English
+
+- Toolchain Freshness now authenticates latest yt-dlp release checks with the GitHub Actions token to avoid scheduled failures from unauthenticated GitHub API rate limits.
+
 ## 0.1.11 - 2026-06-24
 
 ### 中文
