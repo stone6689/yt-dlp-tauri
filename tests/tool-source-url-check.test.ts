@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { evaluateToolSourceUrls } from "../scripts/check-tool-source-urls.mjs";
+import {
+  checkToolSourceUrl,
+  evaluateToolSourceUrls,
+} from "../scripts/check-tool-source-urls.mjs";
 
 test("tool source URL check reports unavailable manifest URLs with target and tool names", async () => {
   const manifest = {
@@ -76,4 +79,24 @@ test("tool source URL check retries transient failures", async () => {
     checkedUrlCount: 1,
     problems: [],
   });
+});
+
+test("tool source URL check falls back to a ranged GET when HEAD is unsupported", async () => {
+  const calls: RequestInit[] = [];
+  const result = await checkToolSourceUrl(
+    "https://example.test/tool.zip",
+    async (_url, init) => {
+      calls.push(init ?? {});
+      return init?.method === "HEAD"
+        ? new Response(null, { status: 405, statusText: "Method Not Allowed" })
+        : new Response("x", { status: 206, statusText: "Partial Content" });
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["HEAD", "GET"],
+  );
+  assert.equal((calls[1].headers as Record<string, string>).Range, "bytes=0-0");
 });

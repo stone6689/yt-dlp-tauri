@@ -57,14 +57,14 @@ export async function evaluateToolSourceUrls(manifest, checkUrl = checkToolSourc
   };
 }
 
-async function checkUrlWithRetries(url, checkUrl) {
+export async function checkUrlWithRetries(url, checkUrl, maxAttempts = DEFAULT_MAX_ATTEMPTS) {
   let lastResult = {
     ok: false,
     status: undefined,
     statusText: "not checked",
   };
 
-  for (let attempt = 1; attempt <= DEFAULT_MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       lastResult = await checkUrl(url);
     } catch (error) {
@@ -75,7 +75,7 @@ async function checkUrlWithRetries(url, checkUrl) {
       };
     }
 
-    if (lastResult.ok || !isRetryableCheckResult(lastResult) || attempt === DEFAULT_MAX_ATTEMPTS) {
+    if (lastResult.ok || !isRetryableCheckResult(lastResult) || attempt === maxAttempts) {
       return lastResult;
     }
   }
@@ -83,15 +83,15 @@ async function checkUrlWithRetries(url, checkUrl) {
   return lastResult;
 }
 
-function isRetryableCheckResult(result) {
+export function isRetryableCheckResult(result) {
   if (typeof result.status !== "number") {
     return true;
   }
   return result.status === 408 || result.status === 429 || result.status >= 500;
 }
 
-async function checkToolSourceUrl(url) {
-  const response = await fetch(url, {
+export async function checkToolSourceUrl(url, fetchImpl = fetch) {
+  let response = await fetchImpl(url, {
     method: "HEAD",
     redirect: "follow",
     signal: AbortSignal.timeout(20_000),
@@ -99,6 +99,19 @@ async function checkToolSourceUrl(url) {
       "User-Agent": "yt-dlp-tauri-toolchain-check",
     },
   });
+
+  if (response.status === 405 || response.status === 501) {
+    response = await fetchImpl(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(20_000),
+      headers: {
+        Range: "bytes=0-0",
+        "User-Agent": "yt-dlp-tauri-toolchain-check",
+      },
+    });
+    await response.body?.cancel().catch(() => {});
+  }
 
   return {
     ok: response.ok,
