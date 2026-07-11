@@ -3,7 +3,18 @@ name: Toolchain Validation
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      rollback_revision:
+        description: "Historical toolchain revision to revalidate"
+        required: false
+        type: string
   workflow_call:
+    inputs:
+      rollback_revision:
+        description: "Historical toolchain revision to revalidate"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -61,12 +72,16 @@ jobs:
         shell: bash
         env:
           BASELINE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          GH_TOKEN: ${{ github.token }}
+          ROLLBACK_REVISION: ${{ inputs.rollback_revision || '' }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
           import { execFileSync } from "node:child_process";
           import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
           import { generateManifest } from "./scripts/toolchain/generate-manifest.mjs";
+          import { validatePublicationReport } from "./scripts/toolchain/validation-report.mjs";
 
           mkdirSync(".toolchain/manifests", { recursive: true });
           const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -85,24 +100,90 @@ jobs:
             throw new Error(`Unable to read baseline ${path}`);
           };
 
-          const runtimeCandidateManifest = readJson("src-tauri/tools-manifest.json");
-          const candidateLock = readJson("toolchain-lock.json");
-          const policy = readJson("toolchain-policy.json");
-          const generatedRuntimeManifest = generateManifest(policy, candidateLock);
-          if (JSON.stringify(runtimeCandidateManifest) !== JSON.stringify(generatedRuntimeManifest)) {
-            throw new Error("Checked-in runtime manifest differs from the generated lock output");
+          const rollbackRevision = process.env.ROLLBACK_REVISION.trim();
+          let runtimeCandidateManifest;
+          let candidateManifest;
+          let candidateLock;
+          if (rollbackRevision) {
+            if (!/^[0-9]{8}\.[1-9][0-9]*$/u.test(rollbackRevision)) {
+              throw new Error(`Invalid rollback revision: ${rollbackRevision}`);
+            }
+            const releaseResponse = await fetch(
+              `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/releases/tags/toolchain-stable`,
+              {
+                headers: {
+                  Accept: "application/vnd.github+json",
+                  Authorization: `Bearer ${process.env.GH_TOKEN}`,
+                  "User-Agent": "yt-dlp-tauri-toolchain-revalidation",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                },
+              },
+            );
+            if (!releaseResponse.ok) {
+              throw new Error(`Stable toolchain release lookup failed: ${releaseResponse.status}`);
+            }
+            const release = await releaseResponse.json();
+            const downloadAsset = async (name) => {
+              const matches = release.assets.filter((asset) => asset.name === name);
+              if (matches.length !== 1) {
+                throw new Error(`Expected one historical release asset ${name}`);
+              }
+              const response = await fetch(matches[0].browser_download_url, {
+                headers: { "User-Agent": "yt-dlp-tauri-toolchain-revalidation" },
+              });
+              if (!response.ok) throw new Error(`${name} download failed: ${response.status}`);
+              const bytes = Buffer.from(await response.arrayBuffer());
+              const digest = createHash("sha256").update(bytes).digest("hex");
+              const expected = String(matches[0].digest ?? "").replace(/^sha256:/u, "");
+              if (bytes.length !== matches[0].size || digest !== expected) {
+                throw new Error(`${name} differs from its immutable release metadata`);
+              }
+              return { bytes, digest };
+            };
+            const manifestName = `tools-manifest-${rollbackRevision}.json`;
+            const validationName = `toolchain-validation-${rollbackRevision}.json`;
+            const manifestAsset = await downloadAsset(manifestName);
+            const validationAsset = await downloadAsset(validationName);
+            runtimeCandidateManifest = JSON.parse(manifestAsset.bytes);
+            candidateManifest = runtimeCandidateManifest;
+            const historicalValidation = JSON.parse(validationAsset.bytes);
+            if (runtimeCandidateManifest.revision !== rollbackRevision) {
+              throw new Error("Historical manifest revision does not match the request");
+            }
+            validatePublicationReport(historicalValidation, {
+              revision: rollbackRevision,
+              commitSha: historicalValidation.commitSha,
+              manifestSha256: manifestAsset.digest,
+              lockSha256: historicalValidation.lockSha256,
+            });
+            writeJson(
+              ".toolchain/manifests/historical-validation.json",
+              historicalValidation,
+            );
+          } else {
+            runtimeCandidateManifest = readJson("src-tauri/tools-manifest.json");
+            candidateLock = readJson("toolchain-lock.json");
+            const policy = readJson("toolchain-policy.json");
+            const generatedRuntimeManifest = generateManifest(policy, candidateLock);
+            if (JSON.stringify(runtimeCandidateManifest) !== JSON.stringify(generatedRuntimeManifest)) {
+              throw new Error("Checked-in runtime manifest differs from the generated lock output");
+            }
+            candidateManifest = generateManifest(policy, candidateLock, {
+              sourceMode: "upstream",
+            });
           }
-          const candidateManifest = generateManifest(policy, candidateLock, {
-            sourceMode: "upstream",
-          });
           const baselineManifestJson = showBaseline("src-tauri/tools-manifest.json");
           const baselineLockJson = showBaseline("toolchain-lock.json");
           const baselineManifest = JSON.parse(baselineManifestJson);
-          copyFileSync(
-            "src-tauri/tools-manifest.json",
+          writeJson(
             ".toolchain/manifests/runtime-candidate.json",
+            runtimeCandidateManifest,
           );
-          copyFileSync("toolchain-lock.json", ".toolchain/manifests/candidate-lock.json");
+          if (candidateLock) {
+            copyFileSync("toolchain-lock.json", ".toolchain/manifests/candidate-lock.json");
+          } else {
+            writeJson(".toolchain/manifests/candidate-lock.json", null);
+          }
           writeJson(".toolchain/manifests/candidate.json", candidateManifest);
           writeFileSync(".toolchain/manifests/baseline.json", baselineManifestJson, "utf8");
           writeFileSync(".toolchain/manifests/baseline-lock.json", baselineLockJson, "utf8");
@@ -208,7 +289,7 @@ jobs:
 
       - name: Candidate public-site Canary
         id: candidate_canary
-        if: ${{ matrix.target == 'win-x64' && steps.candidate_compatibility.outcome == 'success' }}
+        if: ${{ inputs.rollback_revision == '' && matrix.target == 'win-x64' && steps.candidate_compatibility.outcome == 'success' }}
         continue-on-error: true
         shell: bash
         run: |
@@ -278,7 +359,7 @@ jobs:
 
       - name: Verify Windows FFmpeg mirror candidate
         id: mirror_candidate
-        if: ${{ matrix.target == 'win-x64' && steps.candidate_smoke.outcome == 'success' && steps.candidate_compatibility.outcome == 'success' }}
+        if: ${{ inputs.rollback_revision == '' && matrix.target == 'win-x64' && steps.candidate_smoke.outcome == 'success' && steps.candidate_compatibility.outcome == 'success' }}
         continue-on-error: true
         shell: bash
         env:
@@ -404,6 +485,7 @@ jobs:
           DIAGNOSTIC_YTDLP: ${{ steps.diagnostic_ytdlp.outcome }}
           DIAGNOSTIC_DENO: ${{ steps.diagnostic_deno.outcome }}
           DIAGNOSTIC_FFMPEG: ${{ steps.diagnostic_ffmpeg.outcome }}
+          ROLLBACK_REVISION: ${{ inputs.rollback_revision || '' }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
@@ -415,6 +497,7 @@ jobs:
 
           const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
           const target = process.env.TARGET;
+          const rollbackRevision = process.env.ROLLBACK_REVISION.trim();
           const manifest = readJson(".toolchain/manifests/runtime-candidate.json");
           const lock = readJson(".toolchain/manifests/candidate-lock.json");
           const manifestTarget = manifest.targets.find((item) => item.target === target);
@@ -426,27 +509,43 @@ jobs:
             name: tool.name,
             version: statusByName.get(tool.name)?.version ?? tool.version,
           }));
-          const matchingAssets = lock.sources.flatMap((source) =>
-            source.assets
-              .filter((asset) => asset.target === target)
-              .map((asset) => ({ sourceId: source.id, asset })),
-          );
-          const assets = matchingAssets.map(({ sourceId, asset }) => ({
-            sourceId,
-            releaseId: asset.releaseId,
-            assetId: asset.assetId,
-            assetName: asset.assetName,
-            sourceUrl: asset.sourceUrl,
-            size: asset.size,
-            officialSha256: asset.sha256,
-          }));
-          const extractedHashes = matchingAssets.flatMap(({ asset }) =>
-            asset.members.map((member) => ({
-              tool: member.tool,
-              path: member.path,
-              sha256: member.sha256,
-            })),
-          );
+          let assets;
+          let extractedHashes;
+          if (rollbackRevision) {
+            const historicalValidation = readJson(
+              ".toolchain/manifests/historical-validation.json",
+            );
+            const historicalTarget = historicalValidation.targets.find(
+              (item) => item.target === target,
+            );
+            if (!historicalTarget) {
+              throw new Error(`Historical validation is missing ${target}`);
+            }
+            assets = historicalTarget.assets;
+            extractedHashes = historicalTarget.extractedHashes;
+          } else {
+            const matchingAssets = lock.sources.flatMap((source) =>
+              source.assets
+                .filter((asset) => asset.target === target)
+                .map((asset) => ({ sourceId: source.id, asset })),
+            );
+            assets = matchingAssets.map(({ sourceId, asset }) => ({
+              sourceId,
+              releaseId: asset.releaseId,
+              assetId: asset.assetId,
+              assetName: asset.assetName,
+              sourceUrl: asset.sourceUrl,
+              size: asset.size,
+              officialSha256: asset.sha256,
+            }));
+            extractedHashes = matchingAssets.flatMap(({ asset }) =>
+              asset.members.map((member) => ({
+                tool: member.tool,
+                path: member.path,
+                sha256: member.sha256,
+              })),
+            );
+          }
           const diagnostics = [
             ["yt-dlp", process.env.DIAGNOSTIC_YTDLP],
             ["deno", process.env.DIAGNOSTIC_DENO],
@@ -468,7 +567,11 @@ jobs:
               summary: "Infrastructure baseline failed",
             });
           }
-          if (target === "win-x64" && process.env.CANDIDATE_COMPATIBILITY === "success") {
+          if (
+            !rollbackRevision &&
+            target === "win-x64" &&
+            process.env.CANDIDATE_COMPATIBILITY === "success"
+          ) {
             diagnostics.push({
               sourceUnit: "ffmpeg-mirror",
               success: process.env.MIRROR_ELIGIBLE === "true",
@@ -481,9 +584,10 @@ jobs:
           const checks = {
             supplyChain:
               smoke !== null &&
-              (!manifestTarget.tools.some((tool) =>
-                tool.sourceUrl.includes("/releases/download/toolchain-stable/"),
-              ) ||
+              (Boolean(rollbackRevision) ||
+                !manifestTarget.tools.some((tool) =>
+                  tool.sourceUrl.includes("/releases/download/toolchain-stable/"),
+                ) ||
                 process.env.MIRROR_ELIGIBLE === "true"),
             executables: process.env.CANDIDATE_SMOKE === "success",
             dash: process.env.CANDIDATE_COMPATIBILITY === "success",
@@ -576,6 +680,8 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          ROLLBACK_REVISION: ${{ inputs.rollback_revision || '' }}
         run: |
           node --input-type=module <<'NODE'
           import { createHash } from "node:crypto";
@@ -594,18 +700,76 @@ jobs:
               JSON.parse(await readFile(join(reportDirectory, name), "utf8")),
             ),
           );
-          const lockBytes = await readFile("toolchain-lock.json");
-          const manifestBytes = await readFile("src-tauri/tools-manifest.json");
-          const lock = JSON.parse(lockBytes);
           const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-          const context = {
-            revision: lock.revision,
-            commitSha: process.env.COMMIT_SHA,
-            manifestSha256: sha256(manifestBytes),
-            lockSha256: sha256(lockBytes),
-            runId: process.env.RUN_ID,
-            runUrl: process.env.RUN_URL,
-          };
+          const rollbackRevision = process.env.ROLLBACK_REVISION.trim();
+          let context;
+          if (rollbackRevision) {
+            const releaseResponse = await fetch(
+              `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/releases/tags/toolchain-stable`,
+              {
+                headers: {
+                  Accept: "application/vnd.github+json",
+                  Authorization: `Bearer ${process.env.GH_TOKEN}`,
+                  "User-Agent": "yt-dlp-tauri-toolchain-revalidation",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                },
+              },
+            );
+            if (!releaseResponse.ok) {
+              throw new Error(`Stable toolchain release lookup failed: ${releaseResponse.status}`);
+            }
+            const release = await releaseResponse.json();
+            const downloadAsset = async (name) => {
+              const matches = release.assets.filter((asset) => asset.name === name);
+              if (matches.length !== 1) {
+                throw new Error(`Expected one historical release asset ${name}`);
+              }
+              const response = await fetch(matches[0].browser_download_url, {
+                headers: { "User-Agent": "yt-dlp-tauri-toolchain-revalidation" },
+              });
+              if (!response.ok) throw new Error(`${name} download failed: ${response.status}`);
+              const bytes = Buffer.from(await response.arrayBuffer());
+              const digest = sha256(bytes);
+              const expected = String(matches[0].digest ?? "").replace(/^sha256:/u, "");
+              if (bytes.length !== matches[0].size || digest !== expected) {
+                throw new Error(`${name} differs from its immutable release metadata`);
+              }
+              return { bytes, digest };
+            };
+            const manifestAsset = await downloadAsset(
+              `tools-manifest-${rollbackRevision}.json`,
+            );
+            const validationAsset = await downloadAsset(
+              `toolchain-validation-${rollbackRevision}.json`,
+            );
+            const historicalValidation = JSON.parse(validationAsset.bytes);
+            validatePublicationReport(historicalValidation, {
+              revision: rollbackRevision,
+              commitSha: historicalValidation.commitSha,
+              manifestSha256: manifestAsset.digest,
+              lockSha256: historicalValidation.lockSha256,
+            });
+            context = {
+              revision: rollbackRevision,
+              commitSha: process.env.COMMIT_SHA,
+              manifestSha256: manifestAsset.digest,
+              lockSha256: historicalValidation.lockSha256,
+              runId: process.env.RUN_ID,
+              runUrl: process.env.RUN_URL,
+            };
+          } else {
+            const lockBytes = await readFile("toolchain-lock.json");
+            const manifestBytes = await readFile("src-tauri/tools-manifest.json");
+            const lock = JSON.parse(lockBytes);
+            context = {
+              revision: lock.revision,
+              commitSha: process.env.COMMIT_SHA,
+              manifestSha256: sha256(manifestBytes),
+              lockSha256: sha256(lockBytes),
+              runId: process.env.RUN_ID,
+              runUrl: process.env.RUN_URL,
+            };
+          }
           const canary = reports.find((report) => report.target === "win-x64")?.canary;
           if (canary) context.canary = canary;
           const merged = mergeTargetReports(reports, context);

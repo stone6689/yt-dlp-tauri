@@ -113,12 +113,174 @@ export function createPublicationPlan(input) {
 
   return {
     schemaVersion: 1,
+    mode: "publish",
     repository,
     revision,
     commitSha,
     pullRequest: input.mergedPullRequest.number,
     createRelease: release == null,
     steps,
+  };
+}
+
+export function createRollbackPlan(input) {
+  if (!input || typeof input !== "object") throw new Error("Rollback input is required");
+  const repository = requireRepository(input.repository);
+  const rollbackRevision = requireRevision(input.rollbackRevision);
+  const currentCommitSha = requireCommit(input.currentCommitSha, "Rollback commit");
+  const reason = requireString(input.reason, "Rollback reason").trim();
+  const actor = requireString(input.actor, "Rollback actor").trim();
+  const dryRun = input.dryRun ?? false;
+  if (typeof dryRun !== "boolean") throw new Error("Rollback dry-run flag must be a boolean");
+
+  const release = requireStableRelease(input.release);
+  if (!release) throw new Error("Rollback requires the stable release");
+  const applicationRelease = requireApplicationRelease(input.applicationRelease);
+  const currentChannel = channelFromReleaseBody(release.body);
+  if (!currentChannel) throw new Error("Rollback requires a promoted stable channel");
+  if (rollbackRevision === currentChannel.revision) {
+    throw new Error(`Toolchain revision ${rollbackRevision} is already promoted`);
+  }
+  if (compareToolchainRevisions(rollbackRevision, currentChannel.revision) >= 0) {
+    throw new Error("Rollback revision must be older than the promoted revision");
+  }
+
+  const manifest = requireArtifactDescriptor(
+    input.historicalManifest,
+    "Historical toolchain manifest",
+    `tools-manifest-${rollbackRevision}.json`,
+  );
+  if (manifest.value?.revision !== rollbackRevision) {
+    throw new Error("Historical manifest revision does not match the rollback revision");
+  }
+  requireExistingAsset(release.assets, manifest, "Historical manifest");
+
+  const validation = requireArtifactDescriptor(
+    input.historicalValidation,
+    "Historical toolchain validation",
+    `toolchain-validation-${rollbackRevision}.json`,
+  );
+  requireExistingAsset(release.assets, validation, "Historical validation");
+  const historicalReport = validation.report;
+  validatePublicationReport(historicalReport, {
+    revision: rollbackRevision,
+    commitSha: historicalReport?.commitSha,
+    manifestSha256: manifest.sha256,
+    lockSha256: historicalReport?.lockSha256,
+  });
+
+  const requiredSourceNames = projectReleaseAssetNames(manifest.value, repository);
+  const suppliedAssets = Array.isArray(input.historicalAssets) ? input.historicalAssets : [];
+  const sourceAssets = requiredSourceNames.map((name) => {
+    const matches = suppliedAssets.filter((asset) => asset?.name === name);
+    if (matches.length !== 1) {
+      throw new Error(`Historical source asset ${name} must be supplied exactly once`);
+    }
+    const asset = requireArtifactDescriptor(matches[0], `Historical source asset ${name}`, name);
+    try {
+      requireExistingAsset(release.assets, asset, `Historical source asset ${name}`);
+    } catch (error) {
+      throw new Error(`Historical source asset ${name} failed verification: ${error.message}`);
+    }
+    return asset;
+  });
+  if (suppliedAssets.length !== sourceAssets.length) {
+    throw new Error("Unexpected historical source assets were supplied");
+  }
+
+  let provenance;
+  if (sourceAssets.length > 0) {
+    if (sourceAssets.length !== 1) {
+      throw new Error("Rollback supports exactly one mirrored FFmpeg source asset");
+    }
+    provenance = requireArtifactDescriptor(
+      input.historicalProvenance,
+      "Historical FFmpeg provenance",
+      `ffmpeg-provenance-${rollbackRevision}.json`,
+    );
+    requireExistingAsset(release.assets, provenance, "Historical FFmpeg provenance");
+    const content = provenance.value;
+    if (
+      content?.schemaVersion !== 1 ||
+      content.revision !== rollbackRevision ||
+      content.mirrorName !== sourceAssets[0].name ||
+      content.binary?.sha256 !== sourceAssets[0].sha256
+    ) {
+      throw new Error("Historical FFmpeg provenance does not match the mirrored asset");
+    }
+    const ffmpegAssets = historicalReport.targets
+      .find((target) => target.target === "win-x64")
+      ?.assets.filter((asset) => asset.sourceId === "ffmpeg-windows");
+    if (
+      !ffmpegAssets?.length ||
+      ffmpegAssets.some((asset) => asset.officialSha256 !== sourceAssets[0].sha256)
+    ) {
+      throw new Error("Historical validation does not bind the mirrored FFmpeg digest");
+    }
+  } else if (input.historicalProvenance !== undefined) {
+    throw new Error("Historical provenance was supplied without a mirrored source asset");
+  }
+
+  const skipRevalidation = input.skipRevalidation === true;
+  if (skipRevalidation) {
+    if (
+      input.approval?.approved !== true ||
+      input.approval?.environment !== "toolchain-rollback"
+    ) {
+      throw new Error("Skipping revalidation requires the protected rollback environment");
+    }
+  } else {
+    const revalidation = input.revalidation?.report;
+    if (!revalidation) throw new Error("Rollback revalidation report is required");
+    validatePublicationReport(revalidation, {
+      revision: rollbackRevision,
+      commitSha: currentCommitSha,
+      manifestSha256: manifest.sha256,
+      lockSha256: historicalReport.lockSha256,
+    });
+  }
+
+  const channel = {
+    schemaVersion: 1,
+    revision: rollbackRevision,
+    manifest: manifest.name,
+    sha256: manifest.sha256,
+  };
+  return {
+    schemaVersion: 1,
+    mode: "rollback",
+    repository,
+    revision: rollbackRevision,
+    commitSha: currentCommitSha,
+    dryRun,
+    steps: [
+      {
+        kind: "verify-historical-manifest",
+        manifest: publicAsset(manifest),
+        validation: publicAsset(validation),
+      },
+      {
+        kind: "verify-historical-assets",
+        assets: sourceAssets.map(publicAsset),
+        ...(provenance ? { provenance: publicAsset(provenance) } : {}),
+      },
+      {
+        kind: "promote-channel",
+        channel,
+        releaseBody: renderChannelRecord(release.body, channel),
+      },
+      {
+        kind: "record-rollback",
+        fromRevision: currentChannel.revision,
+        toRevision: rollbackRevision,
+        reason,
+        actor,
+        revalidated: !skipRevalidation,
+        releaseId: applicationRelease.id,
+        releaseTag: applicationRelease.tag_name,
+        asset: { ...publicAsset(manifest), name: "tools-manifest.json" },
+      },
+    ],
   };
 }
 
@@ -216,6 +378,39 @@ function existingAssetAction(releaseAssets, expected) {
   if (matches.length === 0) return "upload";
   verifyUploadedAsset(matches[0], expected);
   return "reuse";
+}
+
+function requireExistingAsset(releaseAssets, expected, label) {
+  const matches = releaseAssets.filter((asset) => asset?.name === expected.name);
+  if (matches.length !== 1) {
+    throw new Error(`${label} must exist exactly once on the stable release`);
+  }
+  verifyUploadedAsset(matches[0], expected);
+}
+
+function projectReleaseAssetNames(manifest, repository) {
+  const prefix = `/${repository}/releases/download/toolchain-stable/`;
+  const names = new Set();
+  for (const target of manifest?.targets ?? []) {
+    for (const tool of target?.tools ?? []) {
+      let sourceUrl;
+      try {
+        sourceUrl = new URL(tool?.sourceUrl);
+      } catch {
+        throw new Error("Historical manifest contains an invalid source URL");
+      }
+      if (sourceUrl.hostname !== "github.com" || !sourceUrl.pathname.startsWith(prefix)) {
+        continue;
+      }
+      const encodedName = sourceUrl.pathname.slice(prefix.length);
+      const name = decodeURIComponent(encodedName);
+      if (!name || name.includes("/") || name.includes("\\")) {
+        throw new Error("Historical manifest contains an invalid project asset name");
+      }
+      names.add(name);
+    }
+  }
+  return [...names].sort();
 }
 
 function channelFromReleaseBody(body) {
@@ -353,7 +548,8 @@ if (isDirectExecution()) {
   try {
     const cli = parseCliArguments(process.argv.slice(2));
     const input = JSON.parse(await readFile(cli.input, "utf8"));
-    const plan = createPublicationPlan(input);
+    const plan =
+      input.mode === "rollback" ? createRollbackPlan(input) : createPublicationPlan(input);
     await writeFile(cli.output, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
     process.stdout.write(`${JSON.stringify({ revision: plan.revision, steps: plan.steps.length })}\n`);
   } catch (error) {

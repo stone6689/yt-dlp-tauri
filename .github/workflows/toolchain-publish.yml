@@ -7,6 +7,27 @@ on:
       - toolchain-lock.json
       - src-tauri/tools-manifest.json
   workflow_dispatch:
+    inputs:
+      rollback_revision:
+        description: "Historical toolchain revision to promote"
+        required: false
+        default: ""
+        type: string
+      reason:
+        description: "Required audit reason for a rollback"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Validate and report a rollback without changing the channel"
+        required: false
+        default: true
+        type: boolean
+      skip_revalidation:
+        description: "Use protected approval instead of native revalidation"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -18,21 +39,40 @@ concurrency:
 jobs:
   validation:
     name: Validate candidate
+    if: ${{ !inputs.skip_revalidation }}
     permissions:
       contents: read
     uses: ./.github/workflows/toolchain-validate.yml
+    with:
+      rollback_revision: ${{ inputs.rollback_revision || '' }}
+
+  rollback-approval:
+    name: Approve revalidation bypass
+    if: ${{ inputs.rollback_revision != '' && inputs.skip_revalidation }}
+    runs-on: ubuntu-latest
+    environment: toolchain-rollback
+    permissions:
+      contents: read
+    steps:
+      - name: Record protected approval
+        run: echo "Protected rollback revalidation bypass approved"
 
   publish:
     name: Publish validated toolchain
-    if: ${{ github.ref == 'refs/heads/main' }}
-    needs: validation
+    if: ${{ always() && github.ref == 'refs/heads/main' && (needs.validation.result == 'success' || (inputs.rollback_revision != '' && inputs.skip_revalidation && needs.rollback-approval.result == 'success')) }}
+    needs: [validation, rollback-approval]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: write
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: toolchain-stable
+      ROLLBACK_REVISION: ${{ inputs.rollback_revision || '' }}
+      ROLLBACK_REASON: ${{ inputs.reason || '' }}
+      ROLLBACK_DRY_RUN: ${{ inputs.dry_run || false }}
+      SKIP_REVALIDATION: ${{ inputs.skip_revalidation || false }}
 
     steps:
       - name: Checkout exact commit
@@ -47,12 +87,14 @@ jobs:
           node-version: 24
 
       - name: Download canonical validation report
+        if: ${{ !inputs.skip_revalidation }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: toolchain-validation-report
           path: .toolchain/validation
 
       - name: Download toolchain mirror candidates
+        if: ${{ inputs.rollback_revision == '' }}
         id: mirror_artifact
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -72,10 +114,37 @@ jobs:
             exit 1
           fi
 
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            "repos/${GITHUB_REPOSITORY}/commits/$GITHUB_SHA/pulls" \
-            > .toolchain/publication/associated-pulls.json
+          if [[ "$SKIP_REVALIDATION" == "true" ]]; then
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/environments/toolchain-rollback" \
+              > .toolchain/publication/rollback-environment.json
+            node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const environment = JSON.parse(
+            readFileSync(
+              ".toolchain/publication/rollback-environment.json",
+              "utf8",
+            ),
+          );
+          const reviewerRule = environment.protection_rules?.find(
+            (rule) => rule.type === "required_reviewers",
+          );
+          if (!reviewerRule || !Array.isArray(reviewerRule.reviewers) || reviewerRule.reviewers.length === 0) {
+            throw new Error(
+              "toolchain-rollback must have a non-empty required_reviewers protection rule",
+            );
+          }
+          NODE
+          fi
+
+          if [[ -z "$ROLLBACK_REVISION" ]]; then
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/commits/$GITHUB_SHA/pulls" \
+              > .toolchain/publication/associated-pulls.json
+          else
+            printf '[]\n' > .toolchain/publication/associated-pulls.json
+          fi
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
             > .toolchain/publication/application-release.json
 
@@ -103,6 +172,7 @@ jobs:
           fi
 
       - name: Build and validate publication plan
+        id: publication_plan
         shell: bash
         run: |
           set -euo pipefail
@@ -110,6 +180,7 @@ jobs:
           import { createHash } from "node:crypto";
           import { readFileSync, writeFileSync } from "node:fs";
           import { join } from "node:path";
+          import { createRollbackPlan } from "./scripts/publish-toolchain.mjs";
 
           const directory = ".toolchain/publication";
           const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -120,27 +191,8 @@ jobs:
             if (contentField) result[contentField] = JSON.parse(bytes);
             return result;
           };
-
-          const lockPath = "toolchain-lock.json";
-          const manifestPath = "src-tauri/tools-manifest.json";
-          const validationPath = ".toolchain/validation/toolchain-validation.json";
-          const lockBytes = readFileSync(lockPath);
-          const lock = JSON.parse(lockBytes);
-          const revision = lock.revision;
           const commitSha = process.env.GITHUB_SHA;
-          const pulls = readJson(join(directory, "associated-pulls.json"));
-          const matchingPulls = pulls.filter(
-            (pull) =>
-              pull.merged_at &&
-              pull.base?.ref === "main" &&
-              pull.merge_commit_sha === commitSha,
-          );
-          if (matchingPulls.length !== 1) {
-            throw new Error(
-              `Expected one merged main pull request for ${commitSha}, found ${matchingPulls.length}`,
-            );
-          }
-
+          const rollbackRevision = process.env.ROLLBACK_REVISION.trim();
           const stableRelease = readJson(join(directory, "stable-release.json"));
           if (stableRelease) {
             stableRelease.body ??= "";
@@ -149,70 +201,210 @@ jobs:
           const applicationRelease = readJson(
             join(directory, "application-release.json"),
           );
-          const source = lock.sources.find((item) => item.id === "ffmpeg-windows");
-          let mirrorCandidate;
-          if (source?.redistribution?.mirrorEligible === true) {
-            const mirrorName = source.redistribution.mirrorNameTemplate.replace(
-              "{revision}",
+          let input;
+          if (rollbackRevision) {
+            if (!stableRelease) throw new Error("Stable toolchain release does not exist");
+            const assetByName = (name) => {
+              const matches = stableRelease.assets.filter((asset) => asset.name === name);
+              if (matches.length !== 1) {
+                throw new Error(`Expected one stable release asset ${name}`);
+              }
+              return matches[0];
+            };
+            const releaseDescriptor = (asset) => {
+              const digest = String(asset.digest ?? "").replace(/^sha256:/u, "");
+              if (!/^[a-f0-9]{64}$/u.test(digest)) {
+                throw new Error(`${asset.name} has no immutable SHA-256 digest`);
+              }
+              if (!Number.isSafeInteger(asset.size) || asset.size <= 0) {
+                throw new Error(`${asset.name} has an invalid release size`);
+              }
+              return { name: asset.name, size: asset.size, sha256: digest };
+            };
+            const downloadDescriptor = async (name, contentField) => {
+              const asset = assetByName(name);
+              const response = await fetch(asset.browser_download_url, {
+                headers: { "User-Agent": "yt-dlp-tauri-toolchain-rollback" },
+              });
+              if (!response.ok) throw new Error(`${name} download failed: ${response.status}`);
+              const bytes = Buffer.from(await response.arrayBuffer());
+              const result = {
+                name,
+                size: bytes.length,
+                sha256: sha256(bytes),
+                [contentField]: JSON.parse(bytes),
+              };
+              const expected = releaseDescriptor(asset);
+              if (result.size !== expected.size || result.sha256 !== expected.sha256) {
+                throw new Error(`${name} differs from its immutable release metadata`);
+              }
+              if (name.startsWith("tools-manifest-")) {
+                writeFileSync(
+                  join(directory, "historical-tools-manifest.json"),
+                  bytes,
+                );
+              }
+              return result;
+            };
+            const manifestName = `tools-manifest-${rollbackRevision}.json`;
+            const validationName = `toolchain-validation-${rollbackRevision}.json`;
+            const historicalManifest = await downloadDescriptor(manifestName, "value");
+            const historicalValidation = await downloadDescriptor(
+              validationName,
+              "report",
+            );
+            const prefix = `/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.RELEASE_TAG}/`;
+            const sourceNames = new Set();
+            for (const target of historicalManifest.value.targets ?? []) {
+              for (const tool of target.tools ?? []) {
+                const url = new URL(tool.sourceUrl);
+                if (url.hostname === "github.com" && url.pathname.startsWith(prefix)) {
+                  sourceNames.add(decodeURIComponent(url.pathname.slice(prefix.length)));
+                }
+              }
+            }
+            const historicalAssets = [...sourceNames]
+              .sort()
+              .map((name) => releaseDescriptor(assetByName(name)));
+            let historicalProvenance;
+            if (historicalAssets.length > 0) {
+              historicalProvenance = await downloadDescriptor(
+                `ffmpeg-provenance-${rollbackRevision}.json`,
+                "value",
+              );
+            }
+            const skipRevalidation = process.env.SKIP_REVALIDATION === "true";
+            input = {
+              mode: "rollback",
+              repository: process.env.GITHUB_REPOSITORY,
+              rollbackRevision,
+              currentCommitSha: commitSha,
+              reason: process.env.ROLLBACK_REASON,
+              actor: process.env.GITHUB_ACTOR,
+              dryRun: process.env.ROLLBACK_DRY_RUN === "true",
+              skipRevalidation,
+              approval: skipRevalidation
+                ? { approved: true, environment: "toolchain-rollback" }
+                : undefined,
+              release: stableRelease,
+              applicationRelease,
+              historicalManifest,
+              historicalValidation,
+              historicalAssets,
+              historicalProvenance,
+              revalidation: skipRevalidation
+                ? undefined
+                : {
+                    report: readJson(
+                      ".toolchain/validation/toolchain-validation.json",
+                    ),
+                  },
+            };
+          } else {
+            const lockPath = "toolchain-lock.json";
+            const manifestPath = "src-tauri/tools-manifest.json";
+            const validationPath = ".toolchain/validation/toolchain-validation.json";
+            const lockBytes = readFileSync(lockPath);
+            const lock = JSON.parse(lockBytes);
+            const revision = lock.revision;
+            const pulls = readJson(join(directory, "associated-pulls.json"));
+            const matchingPulls = pulls.filter(
+              (pull) =>
+                pull.merged_at &&
+                pull.base?.ref === "main" &&
+                pull.merge_commit_sha === commitSha,
+            );
+            if (matchingPulls.length !== 1) {
+              throw new Error(
+                `Expected one merged main pull request for ${commitSha}, found ${matchingPulls.length}`,
+              );
+            }
+            const source = lock.sources.find((item) => item.id === "ffmpeg-windows");
+            let mirrorCandidate;
+            if (source?.redistribution?.mirrorEligible === true) {
+              const mirrorName = source.redistribution.mirrorNameTemplate.replace(
+                "{revision}",
+                revision,
+              );
+              const mirrorPath = join(".toolchain/mirror-candidates", mirrorName);
+              const provenanceName = `ffmpeg-provenance-${revision}.json`;
+              const provenancePath = join(
+                ".toolchain/mirror-candidates",
+                provenanceName,
+              );
+              const mirror = descriptor(mirrorPath, mirrorName);
+              const provenance = descriptor(
+                provenancePath,
+                provenanceName,
+                "provenance",
+              );
+              mirrorCandidate = {
+                ...mirror,
+                provenanceName,
+                provenanceSha256: provenance.sha256,
+                provenanceSize: provenance.size,
+                provenance: provenance.provenance,
+              };
+            }
+            input = {
+              repository: process.env.GITHUB_REPOSITORY,
               revision,
-            );
-            const mirrorPath = join(".toolchain/mirror-candidates", mirrorName);
-            const provenanceName = `ffmpeg-provenance-${revision}.json`;
-            const provenancePath = join(
-              ".toolchain/mirror-candidates",
-              provenanceName,
-            );
-            const mirror = descriptor(mirrorPath, mirrorName);
-            const provenance = descriptor(
-              provenancePath,
-              provenanceName,
-              "provenance",
-            );
-            mirrorCandidate = {
-              ...mirror,
-              provenanceName,
-              provenanceSha256: provenance.sha256,
-              provenanceSize: provenance.size,
-              provenance: provenance.provenance,
+              commitSha,
+              mergedPullRequest: {
+                number: matchingPulls[0].number,
+                merged: true,
+                mergeCommitSha: matchingPulls[0].merge_commit_sha,
+              },
+              lock: { sha256: sha256(lockBytes), value: lock },
+              manifest: descriptor(
+                manifestPath,
+                `tools-manifest-${revision}.json`,
+                "value",
+              ),
+              validation: descriptor(
+                validationPath,
+                `toolchain-validation-${revision}.json`,
+                "report",
+              ),
+              mirrorCandidate,
+              release: stableRelease,
+              applicationRelease,
             };
           }
-
-          const input = {
-            repository: process.env.GITHUB_REPOSITORY,
-            revision,
-            commitSha,
-            mergedPullRequest: {
-              number: matchingPulls[0].number,
-              merged: true,
-              mergeCommitSha: matchingPulls[0].merge_commit_sha,
-            },
-            lock: { sha256: sha256(lockBytes), value: lock },
-            manifest: descriptor(
-              manifestPath,
-              `tools-manifest-${revision}.json`,
-              "value",
-            ),
-            validation: descriptor(
-              validationPath,
-              `toolchain-validation-${revision}.json`,
-              "report",
-            ),
-            mirrorCandidate,
-            release: stableRelease,
-            applicationRelease,
-          };
           writeFileSync(
             join(directory, "publication-input.json"),
             `${JSON.stringify(input, null, 2)}\n`,
             "utf8",
           );
+          if (rollbackRevision) {
+            const plan = createRollbackPlan(input);
+            writeFileSync(
+              join(directory, "publication-plan.json"),
+              `${JSON.stringify(plan, null, 2)}\n`,
+              "utf8",
+            );
+          }
           NODE
 
-          node scripts/publish-toolchain.mjs --input \
-            .toolchain/publication/publication-input.json --output \
-            .toolchain/publication/publication-plan.json
+          if [[ ! -f .toolchain/publication/publication-plan.json ]]; then
+            node scripts/publish-toolchain.mjs --input \
+              .toolchain/publication/publication-input.json --output \
+              .toolchain/publication/publication-plan.json
+          fi
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          const plan = JSON.parse(
+            readFileSync(".toolchain/publication/publication-plan.json", "utf8"),
+          );
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `mode=${plan.mode}\ndry_run=${plan.dryRun === true}\n`,
+            "utf8",
+          );
+          NODE
 
       - name: Create stable prerelease when absent
+        if: ${{ steps.publication_plan.outputs.mode == 'publish' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -228,6 +420,7 @@ jobs:
           fi
 
       - name: Upload immutable assets - FFmpeg mirror
+        if: ${{ steps.publication_plan.outputs.mode == 'publish' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -255,6 +448,7 @@ jobs:
           fi
 
       - name: Verify uploaded FFmpeg asset
+        if: ${{ steps.publication_plan.outputs.mode == 'publish' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -302,6 +496,7 @@ jobs:
           NODE
 
       - name: Upload immutable metadata assets
+        if: ${{ steps.publication_plan.outputs.mode == 'publish' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -388,6 +583,7 @@ jobs:
           NODE
 
       - name: Promote stable channel
+        if: ${{ steps.publication_plan.outputs.mode == 'publish' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -426,6 +622,7 @@ jobs:
           NODE
 
       - name: Update application compatibility manifest
+        if: ${{ steps.publication_plan.outputs.mode == 'publish' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -486,5 +683,130 @@ jobs:
           verifyUploadedAsset(
             { ...matches[0], size, sha256: hash.digest("hex") },
             expected.asset,
+          );
+          NODE
+
+      - name: Promote rollback channel
+        if: ${{ steps.publication_plan.outputs.mode == 'rollback' && steps.publication_plan.outputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const plan = JSON.parse(
+            readFileSync(".toolchain/publication/publication-plan.json", "utf8"),
+          );
+          const step = plan.steps.find((item) => item.kind === "promote-channel");
+          if (!step) throw new Error("Rollback plan is missing channel promotion");
+          writeFileSync(
+            ".toolchain/publication/rollback-release-patch.json",
+            `${JSON.stringify({ body: step.releaseBody })}\n`,
+            "utf8",
+          );
+          NODE
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            --input .toolchain/publication/rollback-release-patch.json \
+            > .toolchain/publication/rollback-promoted-release.json
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { parseChannelRecord } from "./scripts/toolchain/channel.mjs";
+          const plan = JSON.parse(
+            readFileSync(".toolchain/publication/publication-plan.json", "utf8"),
+          );
+          const release = JSON.parse(
+            readFileSync(
+              ".toolchain/publication/rollback-promoted-release.json",
+              "utf8",
+            ),
+          );
+          const expected = plan.steps.find((step) => step.kind === "promote-channel").channel;
+          const actual = parseChannelRecord(release.body);
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error("Rollback channel differs from the validated plan");
+          }
+          NODE
+
+      - name: Record rollback decision
+        if: ${{ steps.publication_plan.outputs.mode == 'rollback' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.publication_plan.outputs.dry_run }}" != "true" ]]; then
+            release_tag="$(node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const plan = JSON.parse(
+            readFileSync(".toolchain/publication/publication-plan.json", "utf8"),
+          );
+          const step = plan.steps.find((item) => item.kind === "record-rollback");
+          process.stdout.write(step.releaseTag);
+          NODE
+            )"
+            gh release upload "$release_tag" \
+              ".toolchain/publication/historical-tools-manifest.json#tools-manifest.json" \
+              --clobber --repo "$GITHUB_REPOSITORY"
+            gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+              > .toolchain/publication/rollback-application-release-after-upload.json
+            node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          import { verifyUploadedAsset } from "./scripts/publish-toolchain.mjs";
+          const plan = JSON.parse(
+            readFileSync(".toolchain/publication/publication-plan.json", "utf8"),
+          );
+          const expected = plan.steps.find((step) => step.kind === "record-rollback");
+          const release = JSON.parse(
+            readFileSync(
+              ".toolchain/publication/rollback-application-release-after-upload.json",
+              "utf8",
+            ),
+          );
+          if (release.id !== expected.releaseId || release.tag_name !== expected.releaseTag) {
+            throw new Error("Latest application release changed during rollback");
+          }
+          const matches = release.assets.filter(
+            (asset) => asset.name === "tools-manifest.json",
+          );
+          if (matches.length !== 1) {
+            throw new Error("Rollback compatibility manifest upload is ambiguous");
+          }
+          const response = await fetch(matches[0].browser_download_url);
+          if (!response.ok || !response.body) {
+            throw new Error(`Rollback compatibility download failed: ${response.status}`);
+          }
+          const hash = createHash("sha256");
+          let size = 0;
+          for await (const chunk of response.body) {
+            hash.update(chunk);
+            size += chunk.length;
+          }
+          verifyUploadedAsset(
+            { ...matches[0], size, sha256: hash.digest("hex") },
+            expected.asset,
+          );
+          NODE
+          fi
+
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          const plan = JSON.parse(
+            readFileSync(".toolchain/publication/publication-plan.json", "utf8"),
+          );
+          const step = plan.steps.find((item) => item.kind === "record-rollback");
+          const heading = plan.dryRun ? "Rollback dry run" : "Toolchain rollback";
+          appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            [
+              `## ${heading}`,
+              "",
+              `- From: \`${step.fromRevision}\``,
+              `- To: \`${step.toRevision}\``,
+              `- Reason: ${step.reason}`,
+              `- Actor: \`${step.actor}\``,
+              `- Native revalidation: ${step.revalidated ? "completed" : "protected bypass"}`,
+              "",
+            ].join("\n"),
+            "utf8",
           );
           NODE

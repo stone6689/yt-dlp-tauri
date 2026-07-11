@@ -3,14 +3,16 @@ import test from "node:test";
 
 import {
   createPublicationPlan,
+  createRollbackPlan,
   verifyUploadedAsset,
 } from "../scripts/publish-toolchain.mjs";
+import { renderChannelRecord } from "../scripts/toolchain/channel.mjs";
 import {
   createTargetReport,
   mergeTargetReports,
 } from "../scripts/toolchain/validation-report.mjs";
 
-function targetReport(target: string) {
+function targetReport(target: string, windowsFfmpegSha256?: string) {
   const architecture = target === "macos-arm64" ? "arm64" : "x64";
   const tools = ["deno", "ffmpeg", "ffprobe", "yt-dlp"].map((name) => ({
     name,
@@ -29,13 +31,19 @@ function targetReport(target: string) {
     },
     tools,
     assets: tools.map((tool, index) => ({
-      sourceId: tool.name,
+      sourceId:
+        target === "win-x64" && ["ffmpeg", "ffprobe"].includes(tool.name)
+          ? "ffmpeg-windows"
+          : tool.name,
       releaseId: index + 1,
       assetId: index + 10,
       assetName: `${tool.name}.zip`,
       sourceUrl: `https://example.test/${tool.name}.zip`,
       size: 100 + index,
-      officialSha256: String(index + 1).repeat(64),
+      officialSha256:
+        target === "win-x64" && ["ffmpeg", "ffprobe"].includes(tool.name)
+          ? windowsFfmpegSha256 ?? String(index + 1).repeat(64)
+          : String(index + 1).repeat(64),
     })),
     extractedHashes: tools.map((tool, index) => ({
       tool: tool.name,
@@ -43,6 +51,15 @@ function targetReport(target: string) {
       sha256: String(index + 5).repeat(64),
     })),
   });
+}
+
+function releaseAsset(name: string, size: number, sha256: string) {
+  return {
+    name,
+    size,
+    digest: `sha256:${sha256}`,
+    browser_download_url: `https://github.com/Chlience/yt-dlp-tauri/releases/download/toolchain-stable/${name}`,
+  };
 }
 
 function publicationFixture(overrides = {}) {
@@ -151,6 +168,127 @@ function publicationFixture(overrides = {}) {
       manifest: "tools-manifest-20260710.1.json",
       sha256: "9".repeat(64),
     },
+    ...overrides,
+  };
+}
+
+function rollbackFixture(overrides = {}) {
+  const rollbackRevision = "20260710.1";
+  const currentRevision = "20260711.2";
+  const currentCommitSha = "8".repeat(40);
+  const manifestSha256 = "1".repeat(64);
+  const lockSha256 = "3".repeat(64);
+  const mirrorSha256 = "2".repeat(64);
+  const validationSha256 = "4".repeat(64);
+  const provenanceSha256 = "5".repeat(64);
+  const mirrorName = `ffmpeg-win-x64-${rollbackRevision}.zip`;
+  const manifestName = `tools-manifest-${rollbackRevision}.json`;
+  const validationName = `toolchain-validation-${rollbackRevision}.json`;
+  const provenanceName = `ffmpeg-provenance-${rollbackRevision}.json`;
+  const reports = [
+    targetReport("win-x64", mirrorSha256),
+    targetReport("macos-x64"),
+    targetReport("macos-arm64"),
+  ];
+  const historicalReport = mergeTargetReports(reports, {
+    revision: rollbackRevision,
+    commitSha: "7".repeat(40),
+    manifestSha256,
+    lockSha256,
+    runId: "1200",
+    runUrl: "https://github.com/Chlience/yt-dlp-tauri/actions/runs/1200",
+  });
+  const revalidationReport = mergeTargetReports(reports, {
+    revision: rollbackRevision,
+    commitSha: currentCommitSha,
+    manifestSha256,
+    lockSha256,
+    runId: "1300",
+    runUrl: "https://github.com/Chlience/yt-dlp-tauri/actions/runs/1300",
+  });
+  const currentChannel = {
+    schemaVersion: 1,
+    revision: currentRevision,
+    manifest: `tools-manifest-${currentRevision}.json`,
+    sha256: "6".repeat(64),
+  };
+  const body = renderChannelRecord(
+    "# Stable toolchain\n\nManaged by automation\n",
+    currentChannel,
+  );
+  const provenance = {
+    schemaVersion: 1,
+    revision: rollbackRevision,
+    mirrorName,
+    binary: { sha256: mirrorSha256 },
+  };
+  return {
+    mode: "rollback",
+    repository: "Chlience/yt-dlp-tauri",
+    rollbackRevision,
+    currentCommitSha,
+    reason: "Restore the last validated FFmpeg combination",
+    actor: "maintainer",
+    dryRun: false,
+    skipRevalidation: false,
+    release: {
+      id: 101,
+      tag_name: "toolchain-stable",
+      prerelease: true,
+      draft: false,
+      body,
+      assets: [
+        releaseAsset(manifestName, 2048, manifestSha256),
+        releaseAsset(validationName, 4096, validationSha256),
+        releaseAsset(mirrorName, 1000, mirrorSha256),
+        releaseAsset(provenanceName, 1024, provenanceSha256),
+      ],
+    },
+    applicationRelease: {
+      id: 202,
+      tag_name: "v0.1.11",
+      prerelease: false,
+      draft: false,
+    },
+    historicalManifest: {
+      name: manifestName,
+      size: 2048,
+      sha256: manifestSha256,
+      value: {
+        revision: rollbackRevision,
+        targets: [
+          {
+            target: "win-x64",
+            tools: [
+              {
+                name: "ffmpeg",
+                sourceUrl: `https://github.com/Chlience/yt-dlp-tauri/releases/download/toolchain-stable/${mirrorName}`,
+              },
+              {
+                name: "ffprobe",
+                sourceUrl: `https://github.com/Chlience/yt-dlp-tauri/releases/download/toolchain-stable/${mirrorName}`,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    historicalValidation: {
+      name: validationName,
+      size: 4096,
+      sha256: validationSha256,
+      report: historicalReport,
+    },
+    historicalAssets: [
+      { name: mirrorName, size: 1000, sha256: mirrorSha256 },
+    ],
+    historicalProvenance: {
+      name: provenanceName,
+      size: 1024,
+      sha256: provenanceSha256,
+      value: provenance,
+    },
+    revalidation: { report: revalidationReport },
     ...overrides,
   };
 }
@@ -281,5 +419,69 @@ test("uploaded asset verification requires exact name, size, and digest", () => 
         expected,
       ),
     /digest does not match/u,
+  );
+});
+
+test("rollback changes only the channel after verifying historical assets", () => {
+  const plan = createRollbackPlan(rollbackFixture());
+
+  assert.deepEqual(
+    plan.steps.map((step) => step.kind),
+    [
+      "verify-historical-manifest",
+      "verify-historical-assets",
+      "promote-channel",
+      "record-rollback",
+    ],
+  );
+  assert.equal(plan.steps[2].channel.revision, "20260710.1");
+  assert.equal(plan.steps[3].releaseTag, "v0.1.11");
+});
+
+test("rollback rejects the current revision and requires a reason", () => {
+  assert.throws(
+    () => createRollbackPlan(rollbackFixture({ rollbackRevision: "20260711.2" })),
+    /already promoted/u,
+  );
+  assert.throws(
+    () => createRollbackPlan(rollbackFixture({ reason: "  " })),
+    /reason/u,
+  );
+});
+
+test("rollback verifies historical mirror and provenance digests", () => {
+  const fixture = rollbackFixture();
+  fixture.historicalAssets[0].sha256 = "0".repeat(64);
+  assert.throws(() => createRollbackPlan(fixture), /historical source asset/iu);
+
+  const invalidProvenance = rollbackFixture();
+  invalidProvenance.historicalProvenance.value.binary.sha256 = "0".repeat(64);
+  assert.throws(() => createRollbackPlan(invalidProvenance), /provenance/u);
+});
+
+test("rollback requires revalidation or protected environment approval", () => {
+  assert.throws(
+    () => createRollbackPlan(rollbackFixture({ revalidation: undefined })),
+    /revalidation/u,
+  );
+  assert.throws(
+    () =>
+      createRollbackPlan(
+        rollbackFixture({
+          skipRevalidation: true,
+          revalidation: undefined,
+          approval: { approved: true, environment: "another-environment" },
+        }),
+      ),
+    /protected rollback environment/u,
+  );
+  assert.doesNotThrow(() =>
+    createRollbackPlan(
+      rollbackFixture({
+        skipRevalidation: true,
+        revalidation: undefined,
+        approval: { approved: true, environment: "toolchain-rollback" },
+      }),
+    ),
   );
 });

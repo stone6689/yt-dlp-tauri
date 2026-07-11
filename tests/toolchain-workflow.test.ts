@@ -97,6 +97,30 @@ test("publisher validates exact main before promoting immutable assets", () => {
   assert.ok(upload >= 0 && verify > upload && promote > verify && compatibility > promote);
 });
 
+test("rollback revalidates historical revisions unless a protected environment approves a skip", () => {
+  const publisher = readFileSync(".github/workflows/toolchain-publish.yml", "utf8");
+  const validation = readFileSync(".github/workflows/toolchain-validate.yml", "utf8");
+
+  assert.match(publisher, /rollback_revision:\s*\n\s*description:/u);
+  assert.match(publisher, /reason:\s*\n\s*description:/u);
+  assert.match(publisher, /dry_run:\s*\n[\s\S]*?type: boolean/u);
+  assert.match(publisher, /skip_revalidation:\s*\n[\s\S]*?type: boolean/u);
+  assert.match(publisher, /with:\s*\n\s*rollback_revision: \$\{\{ inputs\.rollback_revision/u);
+  assert.match(publisher, /environment: toolchain-rollback/u);
+  assert.match(publisher, /protection_rules[\s\S]*?required_reviewers/u);
+  assert.match(publisher, /createRollbackPlan/u);
+  assert.match(publisher, /Promote rollback channel/u);
+  assert.match(publisher, /Record rollback decision/u);
+  assert.match(publisher, /rollback-application-release-after-upload\.json/u);
+  assert.match(publisher, /steps\.publication_plan\.outputs\.dry_run != 'true'/u);
+
+  assert.match(validation, /workflow_call:\s*\n\s*inputs:\s*\n\s*rollback_revision:/u);
+  assert.match(validation, /ROLLBACK_REVISION/u);
+  assert.match(validation, /tools-manifest-\$\{rollbackRevision\}\.json/u);
+  assert.match(validation, /toolchain-validation-\$\{rollbackRevision\}\.json/u);
+  assert.match(validation, /historical-validation\.json/u);
+});
+
 test("validation workflow uses native targets with read-only permissions", () => {
   const workflow = readFileSync(".github/workflows/toolchain-validate.yml", "utf8");
 
