@@ -50,6 +50,7 @@ test("toolchain automation pins every third-party action to a commit", () => {
     readFileSync(".github/workflows/toolchain-discover.yml", "utf8"),
     readFileSync(".github/workflows/toolchain-freshness.yml", "utf8"),
     readFileSync(".github/workflows/toolchain-validate.yml", "utf8"),
+    readFileSync(".github/workflows/toolchain-canary.yml", "utf8"),
   ];
 
   for (const workflow of workflows) {
@@ -91,10 +92,30 @@ test("validation workflow runs baseline first and diagnoses source units", () =>
   assert.match(workflow, /baseline_smoke\.outcome == 'success'/);
   assert.match(workflow, /candidate_smoke\.outcome != 'success'/);
   assert.match(workflow, /Infrastructure baseline failed/);
+  assert.match(workflow, /Candidate public-site Canary/);
+  assert.match(workflow, /toolchain-canary\.json/);
+  assert.match(workflow, /blocking: false/);
 });
 
 test("repository has one toolchain updater", () => {
   assert.equal(existsSync(".github/workflows/update-yt-dlp.yml"), false);
   assert.equal(existsSync("scripts/update-yt-dlp-manifest.mjs"), false);
   assert.equal(existsSync("scripts/update-toolchain.mjs"), true);
+});
+
+test("stable Canary is daily, stateful, deduplicated, and non-blocking", () => {
+  const workflow = readFileSync(".github/workflows/toolchain-canary.yml", "utf8");
+
+  assert.match(workflow, /cron: "53 5 \* \* \*"/);
+  assert.match(workflow, /actions: read/);
+  assert.match(workflow, /contents: read/);
+  assert.match(workflow, /issues: write/);
+  assert.match(workflow, /toolchain-stable/);
+  assert.match(workflow, /scripts\/toolchain\/canary\.mjs/);
+  assert.match(workflow, /canary-state/);
+  assert.match(workflow, /actions\/artifacts\?name=canary-state/);
+  assert.match(workflow, /\[Toolchain Canary\]/);
+  assert.match(workflow, /state: "open"/);
+  assert.match(workflow, /state: "closed"/);
+  assert.doesNotMatch(workflow, /pull_request_target|secrets: inherit/);
 });

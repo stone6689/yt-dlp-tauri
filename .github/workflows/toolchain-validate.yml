@@ -192,6 +192,19 @@ jobs:
             --report ".toolchain/results/candidate-compatibility-${TARGET}.json" \
             --work-root "$RUNNER_TEMP/toolchain-candidate-compatibility/$TARGET"
 
+      - name: Candidate public-site Canary
+        id: candidate_canary
+        if: ${{ matrix.target == 'win-x64' && steps.candidate_compatibility.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/toolchain/canary.mjs \
+            --config toolchain-canary.json \
+            --smoke-report .toolchain/results/candidate-win-x64.json \
+            --previous-state .toolchain/results/no-candidate-canary-state.json \
+            --output-dir .toolchain/candidate-canary
+
       - name: Diagnostic yt-dlp
         id: diagnostic_ytdlp
         if: ${{ steps.baseline_smoke.outcome == 'success' && steps.baseline_compatibility.outcome == 'success' && (steps.candidate_smoke.outcome != 'success' || steps.candidate_compatibility.outcome != 'success') }}
@@ -419,6 +432,21 @@ jobs:
             dash: process.env.CANDIDATE_COMPATIBILITY === "success",
             projectTests: process.env.PROJECT_TESTS === "success",
           };
+          let canary;
+          if (target === "win-x64") {
+            const observationsPath = ".toolchain/candidate-canary/canary-observations.json";
+            if (existsSync(observationsPath)) {
+              const observations = readJson(observationsPath);
+              canary = {
+                status: observations.every((observation) => observation.ok)
+                  ? "passing"
+                  : "failing",
+                blocking: false,
+              };
+            } else if (process.env.CANDIDATE_COMPATIBILITY === "success") {
+              canary = { status: "unavailable", blocking: false };
+            }
+          }
           const report = createTargetReport({
             target,
             success: Object.values(checks).every(Boolean),
@@ -431,6 +459,7 @@ jobs:
             assets,
             extractedHashes,
             diagnostics,
+            canary,
           });
           mkdirSync(".toolchain/target-reports", { recursive: true });
           writeFileSync(
@@ -520,6 +549,8 @@ jobs:
             runId: process.env.RUN_ID,
             runUrl: process.env.RUN_URL,
           };
+          const canary = reports.find((report) => report.target === "win-x64")?.canary;
+          if (canary) context.canary = canary;
           const merged = mergeTargetReports(reports, context);
           await mkdir(".toolchain/aggregate", { recursive: true });
           await writeFile(

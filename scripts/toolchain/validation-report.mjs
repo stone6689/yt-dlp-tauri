@@ -36,7 +36,7 @@ export function createTargetReport(input) {
     `${target} tool and extracted hash names`,
   );
 
-  return {
+  const report = {
     schemaVersion: SCHEMA_VERSION,
     target,
     success,
@@ -50,6 +50,8 @@ export function createTargetReport(input) {
     extractedHashes,
     diagnostics: normalizeDiagnostics(input.diagnostics ?? [], target),
   };
+  if (input.canary !== undefined) report.canary = normalizeCanary(input.canary);
+  return report;
 }
 
 export function mergeTargetReports(reports, context) {
@@ -138,6 +140,7 @@ function normalizeExistingTargetReport(report) {
     assets: report.assets,
     extractedHashes: report.extractedHashes,
     diagnostics: report.diagnostics,
+    canary: report.canary,
   });
   if (JSON.stringify(normalized) !== JSON.stringify(report)) {
     throw new Error(`${report.target ?? "Unknown target"} report is not canonical`);
@@ -255,18 +258,22 @@ function normalizeContext(context) {
     runUrl: requireHttpsUrl(context.runUrl, "Validation run URL"),
   };
   if (context.canary !== undefined) {
-    if (!context.canary || typeof context.canary !== "object") {
-      throw new Error("Canary status must be an object");
-    }
-    if (context.canary.blocking !== false) {
-      throw new Error("Canary status must remain explicitly non-blocking");
-    }
-    normalized.canary = {
-      status: requireString(context.canary.status, "Canary status"),
-      blocking: false,
-    };
+    normalized.canary = normalizeCanary(context.canary);
   }
   return normalized;
+}
+
+function normalizeCanary(canary) {
+  if (!canary || typeof canary !== "object") {
+    throw new Error("Canary status must be an object");
+  }
+  if (canary.blocking !== false) {
+    throw new Error("Canary status must remain explicitly non-blocking");
+  }
+  return {
+    status: requireString(canary.status, "Canary status"),
+    blocking: false,
+  };
 }
 
 function normalizeExpected(expected) {

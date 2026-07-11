@@ -134,6 +134,26 @@ test("Canary status is optional and cannot become blocking", () => {
   );
 });
 
+test("a failing target Canary remains non-blocking for publication", () => {
+  const windows = targetReport("win-x64", {
+    canary: { status: "failing", blocking: false },
+  });
+  const report = mergeTargetReports(
+    [targetReport("macos-arm64"), targetReport("macos-x64"), windows],
+    reportContext(),
+  );
+
+  assert.equal(report.targets[2].canary.status, "failing");
+  assert.doesNotThrow(() => validatePublicationReport(report, reportContext()));
+  assert.throws(
+    () =>
+      targetReport("win-x64", {
+        canary: { status: "failing", blocking: true },
+      }),
+    /Canary.*non-blocking/u,
+  );
+});
+
 test("publication rejects a mismatched manifest digest", () => {
   const report = mergeTargetReports(targetReports(), reportContext());
   assert.throws(
