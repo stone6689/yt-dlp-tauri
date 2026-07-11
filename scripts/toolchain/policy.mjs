@@ -1,0 +1,177 @@
+import { readFileSync } from "node:fs";
+
+const SOURCE_ADAPTERS = new Set(["github-release", "redirect-release"]);
+const SOURCE_SELECTIONS = new Set([
+  "latest-stable",
+  "previous-complete-month",
+  "latest-redirect",
+]);
+const ASSET_KINDS = new Set(["file", "zip"]);
+
+function requireObject(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value;
+}
+
+function requireNonEmptyString(value, label) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function requireUniqueStrings(values, label) {
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error(`${label} must be a non-empty array`);
+  }
+  const normalized = values.map((value, index) =>
+    requireNonEmptyString(value, `${label}[${index}]`),
+  );
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error(`${label} contains duplicate values`);
+  }
+  return normalized;
+}
+
+function validateMember(memberValue, sourceId, assetIndex, memberIndex, target, kind) {
+  const member = requireObject(
+    memberValue,
+    `source ${sourceId} asset ${assetIndex} member ${memberIndex}`,
+  );
+  member.tool = requireNonEmptyString(member.tool, `source ${sourceId} member tool`);
+  member.path = requireNonEmptyString(member.path, `source ${sourceId} member path`);
+  const expectedPrefix = `Tools/${target}/`;
+  if (!member.path.replaceAll("\\", "/").startsWith(expectedPrefix)) {
+    throw new Error(`source ${sourceId} member path must start with ${expectedPrefix}`);
+  }
+  if (kind === "zip") {
+    member.archivePathSuffix = requireNonEmptyString(
+      member.archivePathSuffix,
+      `source ${sourceId} member archivePathSuffix`,
+    );
+  } else if (member.archivePathSuffix !== undefined) {
+    throw new Error(`source ${sourceId} file member cannot define archivePathSuffix`);
+  }
+  member.licenseNotes = requireNonEmptyString(
+    member.licenseNotes,
+    `source ${sourceId} member licenseNotes`,
+  );
+  return member;
+}
+
+function validateAsset(assetValue, source, assetIndex, targets, approvedHosts) {
+  const asset = requireObject(assetValue, `source ${source.id} asset ${assetIndex}`);
+  asset.target = requireNonEmptyString(asset.target, `source ${source.id} asset target`);
+  if (!targets.has(asset.target)) {
+    throw new Error(`source ${source.id} uses unknown target ${asset.target}`);
+  }
+  asset.kind = requireNonEmptyString(asset.kind, `source ${source.id} asset kind`);
+  if (!ASSET_KINDS.has(asset.kind)) {
+    throw new Error(`source ${source.id} uses unsupported asset kind ${asset.kind}`);
+  }
+
+  if (source.adapter === "github-release") {
+    const hasName = typeof asset.assetName === "string" && asset.assetName.trim() !== "";
+    const hasPattern = typeof asset.assetPattern === "string" && asset.assetPattern.trim() !== "";
+    if (hasName === hasPattern) {
+      throw new Error(`source ${source.id} asset must define exactly one assetName or assetPattern`);
+    }
+    if (hasName) asset.assetName = asset.assetName.trim();
+    if (hasPattern) {
+      asset.assetPattern = asset.assetPattern.trim();
+      try {
+        new RegExp(asset.assetPattern);
+      } catch (error) {
+        throw new Error(`source ${source.id} has invalid assetPattern: ${error}`);
+      }
+    }
+  } else {
+    asset.url = requireNonEmptyString(asset.url, `source ${source.id} asset url`);
+    const parsed = new URL(asset.url);
+    if (parsed.protocol !== "https:") {
+      throw new Error(`source ${source.id} asset URL must use HTTPS`);
+    }
+    if (!approvedHosts.has(parsed.hostname)) {
+      throw new Error(`source ${source.id} uses unapproved host ${parsed.hostname}`);
+    }
+  }
+
+  if (!Array.isArray(asset.members) || asset.members.length === 0) {
+    throw new Error(`source ${source.id} asset members must be a non-empty array`);
+  }
+  asset.members = asset.members.map((member, memberIndex) =>
+    validateMember(member, source.id, assetIndex, memberIndex, asset.target, asset.kind),
+  );
+  return asset;
+}
+
+export function validateToolchainPolicy(value) {
+  const policy = requireObject(value, "toolchain policy");
+  if (policy.schemaVersion !== 1) {
+    throw new Error("toolchain-policy.json schemaVersion must be 1");
+  }
+
+  policy.targets = requireUniqueStrings(policy.targets, "toolchain policy targets");
+  policy.approvedHosts = requireUniqueStrings(
+    policy.approvedHosts,
+    "toolchain policy approvedHosts",
+  );
+  const targets = new Set(policy.targets);
+  const approvedHosts = new Set(policy.approvedHosts);
+
+  if (!Array.isArray(policy.sources) || policy.sources.length === 0) {
+    throw new Error("toolchain policy sources must be a non-empty array");
+  }
+
+  const sourceIds = new Set();
+  policy.sources = policy.sources.map((sourceValue, sourceIndex) => {
+    const source = requireObject(sourceValue, `toolchain source ${sourceIndex}`);
+    source.id = requireNonEmptyString(source.id, `toolchain source ${sourceIndex} id`);
+    if (sourceIds.has(source.id)) {
+      throw new Error(`duplicate source id ${source.id}`);
+    }
+    sourceIds.add(source.id);
+
+    source.adapter = requireNonEmptyString(source.adapter, `source ${source.id} adapter`);
+    if (!SOURCE_ADAPTERS.has(source.adapter)) {
+      throw new Error(`source ${source.id} uses unsupported adapter ${source.adapter}`);
+    }
+    source.selection = requireNonEmptyString(source.selection, `source ${source.id} selection`);
+    if (!SOURCE_SELECTIONS.has(source.selection)) {
+      throw new Error(`source ${source.id} uses unsupported selection ${source.selection}`);
+    }
+
+    if (source.adapter === "github-release") {
+      source.repository = requireNonEmptyString(
+        source.repository,
+        `source ${source.id} repository`,
+      );
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(source.repository)) {
+        throw new Error(`source ${source.id} has invalid GitHub repository`);
+      }
+    }
+    if (!Array.isArray(source.assets) || source.assets.length === 0) {
+      throw new Error(`source ${source.id} assets must be a non-empty array`);
+    }
+    source.assets = source.assets.map((asset, assetIndex) =>
+      validateAsset(asset, source, assetIndex, targets, approvedHosts),
+    );
+    return source;
+  });
+
+  return policy;
+}
+
+export function readToolchainPolicy(path) {
+  return validateToolchainPolicy(JSON.parse(readFileSync(path, "utf8")));
+}
+
+export function sourceById(policy, id) {
+  const source = policy.sources.find((candidate) => candidate.id === id);
+  if (!source) {
+    throw new Error(`Unknown toolchain source: ${id}`);
+  }
+  return source;
+}
