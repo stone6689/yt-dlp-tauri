@@ -114,6 +114,7 @@ test("stable Canary is daily, stateful, deduplicated, and non-blocking", () => {
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /issues: write/);
   assert.match(workflow, /toolchain-stable/);
+  assert.match(workflow, /scripts\/toolchain\/channel\.mjs/);
   assert.match(workflow, /scripts\/toolchain\/canary\.mjs/);
   assert.match(workflow, /canary-state/);
   assert.match(workflow, /actions\/artifacts\?name=canary-state/);

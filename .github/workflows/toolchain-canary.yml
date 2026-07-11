@@ -52,6 +52,10 @@ jobs:
           node --input-type=module <<'NODE'
           import { createHash } from "node:crypto";
           import { appendFile, writeFile } from "node:fs/promises";
+          import {
+            parseChannelRecord,
+            selectManifestAsset,
+          } from "./scripts/toolchain/channel.mjs";
 
           const headers = {
             Accept: "application/vnd.github+json",
@@ -69,20 +73,8 @@ jobs:
             throw new Error(`Stable toolchain release lookup failed: ${releaseResponse.status}`);
           }
           const release = await releaseResponse.json();
-          const markers = [
-            ...(release.body ?? "").matchAll(/<!-- toolchain-channel\s*([\s\S]*?)\s*-->/gu),
-          ];
-          if (markers.length !== 1) throw new Error("Stable release has no unique channel record");
-          const channel = JSON.parse(markers[0][1]);
-          if (
-            channel.schemaVersion !== 1 ||
-            !/^[0-9]{8}\.[1-9][0-9]*$/u.test(channel.revision ?? "") ||
-            !/^[a-f0-9]{64}$/u.test(channel.sha256 ?? "")
-          ) {
-            throw new Error("Stable channel record is invalid");
-          }
-          const asset = release.assets.find((item) => item.name === channel.manifest);
-          if (!asset) throw new Error(`Stable manifest asset is missing: ${channel.manifest}`);
+          const channel = parseChannelRecord(release.body ?? "");
+          const asset = selectManifestAsset(release, channel);
           const manifestResponse = await fetch(asset.browser_download_url, { headers });
           if (!manifestResponse.ok) {
             throw new Error(`Stable manifest download failed: ${manifestResponse.status}`);
