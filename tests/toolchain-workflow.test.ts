@@ -9,6 +9,7 @@ const APP_TOKEN_SHA = "fee1f7d63c2ff003460e3d139729b119787bc349";
 test("weekly workflow uses a GitHub App and one managed branch", () => {
   const workflow = readFileSync(".github/workflows/toolchain-discover.yml", "utf8");
 
+  assert.match(workflow, /^name: Toolchain Discovery$/m);
   assert.match(workflow, /cron: "17 3 \* \* 1"/);
   assert.match(workflow, new RegExp(`actions/checkout@${CHECKOUT_SHA}`));
   assert.match(workflow, new RegExp(`actions/setup-node@${SETUP_NODE_SHA}`));

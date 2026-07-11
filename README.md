@@ -119,7 +119,7 @@ Current release scope:
 
 ## Toolchain Maintenance
 
-The `Toolchain Discover` workflow resolves yt-dlp, Deno, FFmpeg, and FFprobe once per week and maintains one reviewed `bot/toolchain-weekly` pull request. `Toolchain Freshness` checks released source URLs daily and opens a focused emergency pull request for an affected source. Both workflows require human review before merge.
+The `Toolchain Discovery` workflow resolves yt-dlp, Deno, FFmpeg, and FFprobe once per week and maintains one reviewed `bot/toolchain-weekly` pull request. `Toolchain Freshness` checks released source URLs daily and opens a focused emergency pull request for an affected source. Both workflows require human review before merge.
 
 The unified resolver can be inspected locally without changing files:
 

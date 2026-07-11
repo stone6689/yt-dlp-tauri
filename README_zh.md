@@ -119,7 +119,7 @@ src-tauri/target/release/bundle/dmg/
 
 ## 工具链维护
 
-`Toolchain Discover` workflow 每周解析一次 yt-dlp、Deno、FFmpeg 和 FFprobe，并维护一个经人工审核的 `bot/toolchain-weekly` PR。`Toolchain Freshness` 每天检查已发布的来源 URL，并为失效来源创建独立的紧急 PR。所有变更都需要维护者审核后合并。
+`Toolchain Discovery` workflow 每周解析一次 yt-dlp、Deno、FFmpeg 和 FFprobe，并维护一个经人工审核的 `bot/toolchain-weekly` PR。`Toolchain Freshness` 每天检查已发布的来源 URL，并为失效来源创建独立的紧急 PR。所有变更都需要维护者审核后合并。
 
 可以在本地只查看统一解析结果，不修改文件：
 

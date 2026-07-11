@@ -1,4 +1,4 @@
-name: Toolchain Discover
+name: Toolchain Discovery
 
 on:
   schedule:
