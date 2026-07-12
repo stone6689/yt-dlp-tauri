@@ -17,11 +17,13 @@ use tauri::{AppHandle, Emitter, Manager};
 pub mod toolchain;
 
 use toolchain::{
-    build_tool_download_client, install_target, manifest_target, parse_channel_record,
-    parse_manifest, probe_target, require_tools, select_revision_manifest_asset,
-    tool_names_for_target, tool_paths_for_root, tool_target_from, verify_channel_manifest,
-    GitHubRelease, InstallTargetRequest, ManifestTarget, ProgressReporter, ToolInstallProgress,
-    ToolPaths, ToolStatus, ToolsManifest, TOOLS_DIRECTORY,
+    activate_revision, active_tool_paths, build_tool_download_client, manifest_target,
+    parse_channel_record, parse_manifest, probe_target, promote_staged_toolchain,
+    read_active_state, require_tools, revision_root, select_revision_manifest_asset,
+    stage_target_revision, tool_names_for_target, tool_paths_for_root, tool_target_from,
+    verify_channel_manifest, ActiveToolchainState, GitHubRelease, ManifestTarget, ProgressReporter,
+    StageTargetRevisionRequest, ToolInstallProgress, ToolPaths, ToolStatus, ToolsManifest,
+    REVISION_MANIFEST_FILE, TOOLS_DIRECTORY,
 };
 
 const TOOLS_MANIFEST_FILE: &str = "tools-manifest.json";
@@ -254,11 +256,20 @@ async fn fetch_latest_tool_manifest(
 }
 
 #[tauri::command]
-async fn install_tools(app: AppHandle) -> Result<Vec<ToolStatus>, String> {
+async fn install_tools(
+    app: AppHandle,
+    github_access_mode: String,
+) -> Result<Vec<ToolStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let target_name = current_tool_target()?;
-        let target = read_manifest_target(&app, &target_name)?;
-        install_manifest_tools(&app, &target_name, &target, None)
+        let manifest_json = read_current_manifest_json(&app)?;
+        install_and_activate_manifest(
+            &app,
+            &manifest_json,
+            &target_name,
+            &github_access_mode,
+            false,
+        )
     })
     .await
     .map_err(join_error)?
@@ -268,11 +279,17 @@ async fn install_tools(app: AppHandle) -> Result<Vec<ToolStatus>, String> {
 async fn install_tools_from_manifest(
     app: AppHandle,
     manifest_json: String,
+    github_access_mode: String,
 ) -> Result<Vec<ToolStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let target_name = current_tool_target()?;
-        let target = manifest_target_from_json(&manifest_json, &target_name)?;
-        install_manifest_tools(&app, &target_name, &target, Some(&manifest_json))
+        install_and_activate_manifest(
+            &app,
+            &manifest_json,
+            &target_name,
+            &github_access_mode,
+            false,
+        )
     })
     .await
     .map_err(join_error)?
@@ -282,16 +299,21 @@ async fn install_tools_from_manifest(
 async fn reinstall_tools(
     app: AppHandle,
     manifest_json: Option<String>,
+    github_access_mode: String,
 ) -> Result<Vec<ToolStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let target_name = current_tool_target()?;
-        let target = match manifest_json.as_deref() {
-            Some(json) => manifest_target_from_json(json, &target_name)?,
-            None => read_manifest_target(&app, &target_name)?,
+        let manifest_json = match manifest_json {
+            Some(json) => json,
+            None => read_current_manifest_json(&app)?,
         };
-        let root = writable_tools_root(&target_name)?;
-        remove_managed_toolchain(&root)?;
-        install_manifest_tools(&app, &target_name, &target, manifest_json.as_deref())
+        install_and_activate_manifest(
+            &app,
+            &manifest_json,
+            &target_name,
+            &github_access_mode,
+            true,
+        )
     })
     .await
     .map_err(join_error)?
@@ -516,6 +538,9 @@ async fn cancel_download(
 
 fn locate_tools(app: &AppHandle) -> Result<ToolPaths, String> {
     let target = current_tool_target()?;
+    if let Some(paths) = active_tool_paths(&app_data_root()?, &target)? {
+        return Ok(paths);
+    }
     let names = tool_names_for_target(&target)
         .ok_or_else(|| format!("Unsupported tool target: {target}."))?;
     let mut roots = Vec::new();
@@ -603,6 +628,7 @@ fn manifest_from_json(json: &str) -> Result<ToolsManifest, String> {
 fn fetch_latest_tool_manifest_blocking(
     github_access_mode: &str,
 ) -> Result<LatestToolManifestResult, String> {
+    validate_github_access_mode(github_access_mode)?;
     let client = build_tool_download_client("tool manifest")?;
     let stable_url = resolve_github_url_for_mode(TOOLCHAIN_STABLE_API_URL, github_access_mode);
     let release_response = client
@@ -780,6 +806,20 @@ fn resolve_github_url_for_mode(url: &str, github_access_mode: &str) -> String {
     }
 }
 
+fn validate_github_access_mode(github_access_mode: &str) -> Result<(), String> {
+    match github_access_mode {
+        "direct" | "gh-proxy" => Ok(()),
+        _ => Err(format!(
+            "Unsupported GitHub access mode: {github_access_mode}"
+        )),
+    }
+}
+
+fn github_download_url_prefix(github_access_mode: &str) -> Result<Option<&'static str>, String> {
+    validate_github_access_mode(github_access_mode)?;
+    Ok((github_access_mode == "gh-proxy").then_some(GITHUB_PROXY_URL_PREFIX))
+}
+
 fn github_http_error_message(status: reqwest::StatusCode, body: &str) -> String {
     let api_message = serde_json::from_str::<Value>(body)
         .ok()
@@ -799,22 +839,47 @@ fn manifest_target_from_manifest(
 }
 
 fn read_current_manifest(app: &AppHandle) -> Result<ToolsManifest, String> {
+    manifest_from_json(&read_current_manifest_json(app)?)
+}
+
+fn read_current_manifest_json(app: &AppHandle) -> Result<String, String> {
+    let target = current_tool_target()?;
+    let base = app_data_root()?;
+    if let Some(state) = read_active_state(&base, &target)? {
+        let _ = active_tool_paths(&base, &target)?;
+        let path = revision_root(&base, &target, &state.revision)?.join(REVISION_MANIFEST_FILE);
+        return fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "Failed to read active toolchain manifest at {}: {error}",
+                path.display()
+            )
+        });
+    }
+
     let bundled_path = bundled_manifest_path(app)?;
-    let bundled_manifest = read_manifest_file(&bundled_path)?;
+    let bundled_json = fs::read_to_string(&bundled_path).map_err(to_string)?;
+    let bundled_manifest = manifest_from_json(&bundled_json)?;
     let active_manifest = active_tools_manifest_path()
         .ok()
         .filter(|path| path.exists())
-        .map(|path| read_manifest_file(&path))
+        .map(|path| {
+            let json = fs::read_to_string(&path).map_err(to_string)?;
+            let manifest = manifest_from_json(&json)?;
+            Ok::<_, String>((json, manifest))
+        })
         .transpose()?;
 
-    Ok(select_preferred_manifest(&bundled_manifest, active_manifest.as_ref()).clone())
+    match active_manifest {
+        Some((json, manifest))
+            if manifest_freshness_key(&manifest) > manifest_freshness_key(&bundled_manifest) =>
+        {
+            Ok(json)
+        }
+        _ => Ok(bundled_json),
+    }
 }
 
-fn read_manifest_file(path: &Path) -> Result<ToolsManifest, String> {
-    let json = fs::read_to_string(path).map_err(to_string)?;
-    manifest_from_json(&json)
-}
-
+#[cfg(test)]
 fn select_preferred_manifest<'a>(
     bundled: &'a ToolsManifest,
     active: Option<&'a ToolsManifest>,
@@ -827,15 +892,6 @@ fn select_preferred_manifest<'a>(
 
 fn manifest_freshness_key(manifest: &ToolsManifest) -> &str {
     manifest.retrieved_at_utc.as_deref().unwrap_or("")
-}
-
-fn save_active_tools_manifest(json: &str) -> Result<(), String> {
-    let _ = manifest_from_json(json)?;
-    let path = active_tools_manifest_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(to_string)?;
-    }
-    fs::write(path, json).map_err(to_string)
 }
 
 fn active_tools_manifest_path() -> Result<PathBuf, String> {
@@ -871,27 +927,45 @@ fn bundled_manifest_path(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "Unable to locate tools-manifest.json.".to_string())
 }
 
-fn install_manifest_tools(
+fn install_and_activate_manifest(
     app: &AppHandle,
+    manifest_json: &str,
     target_name: &str,
-    target: &ManifestTarget,
-    active_manifest_json: Option<&str>,
+    github_access_mode: &str,
+    force_fresh: bool,
 ) -> Result<Vec<ToolStatus>, String> {
-    let root = writable_tools_root(target_name)?;
-    let temp_root = app_data_root()?.join("tool-downloads");
+    let manifest = manifest_from_json(manifest_json)?;
+    let target = manifest_target_from_manifest(manifest, target_name)?;
+    let base = app_data_root()?;
+    let previous_revision = read_active_state(&base, target_name)?.map(|state| state.revision);
     let reporter = TauriProgressReporter { app };
-    let paths = install_target(InstallTargetRequest {
-        target,
-        install_root: &root,
-        temp_root: &temp_root,
+    let staged = stage_target_revision(StageTargetRevisionRequest {
+        target: &target,
+        manifest_json,
+        base_root: &base,
         asset_root: None,
+        download_url_prefix: github_download_url_prefix(github_access_mode)?,
         reporter: &reporter,
+        force_fresh,
     })?;
-
-    if let Some(json) = active_manifest_json {
-        save_active_tools_manifest(json)?;
+    let state = ActiveToolchainState::new(
+        target_name,
+        staged.revision(),
+        staged.manifest_sha256(),
+        previous_revision,
+    )?;
+    let promoted = promote_staged_toolchain(staged)?;
+    if let Err(activation_error) = activate_revision(&base, &state) {
+        return match promoted.rollback() {
+            Ok(()) => Err(activation_error),
+            Err(rollback_error) => Err(format!(
+                "{activation_error}. Toolchain file rollback also failed: {rollback_error}"
+            )),
+        };
     }
-    probe_target(&paths, target)
+    let paths = promoted.paths.clone();
+    promoted.commit();
+    probe_target(&paths, &target)
 }
 
 struct TauriProgressReporter<'a> {
@@ -902,29 +976,6 @@ impl ProgressReporter for TauriProgressReporter<'_> {
     fn emit(&self, progress: ToolInstallProgress) {
         emit_tool_install_progress(self.app, progress);
     }
-}
-
-fn remove_managed_toolchain(root: &Path) -> Result<(), String> {
-    if root.exists() {
-        fs::remove_dir_all(root).map_err(|error| {
-            format!(
-                "Failed to remove managed tools at {}: {error}",
-                root.display()
-            )
-        })?;
-    }
-
-    let temp_root = app_data_root()?.join("tool-downloads");
-    if temp_root.exists() {
-        fs::remove_dir_all(&temp_root).map_err(|error| {
-            format!(
-                "Failed to remove temporary tool downloads at {}: {error}",
-                temp_root.display()
-            )
-        })?;
-    }
-
-    Ok(())
 }
 
 fn probe_manifest_tools(
@@ -1785,6 +1836,15 @@ mod tests {
         assert!(!should_use_legacy_tool_manifest(
             reqwest::StatusCode::INTERNAL_SERVER_ERROR
         ));
+    }
+
+    #[test]
+    fn install_update_and_reinstall_share_one_activation_path() {
+        let source = include_str!("lib.rs");
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+
+        assert!(production.matches("install_and_activate_manifest(").count() >= 4);
+        assert!(!production.contains("remove_managed_toolchain(&root)?"));
     }
 
     #[test]

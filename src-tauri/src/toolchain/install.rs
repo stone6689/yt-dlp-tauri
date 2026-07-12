@@ -41,6 +41,7 @@ pub struct StageTargetRevisionRequest<'a> {
     pub manifest_json: &'a str,
     pub base_root: &'a Path,
     pub asset_root: Option<&'a Path>,
+    pub download_url_prefix: Option<&'a str>,
     pub reporter: &'a dyn ProgressReporter,
     pub force_fresh: bool,
 }
@@ -169,8 +170,16 @@ pub fn stage_target_revision(
     })?;
     let result = (|| {
         let temp_root = staging_root.join(".downloads");
+        let mut download_target = target.clone();
+        if let Some(prefix) = request.download_url_prefix {
+            for tool in &mut download_target.tools {
+                if !tool.source_url.starts_with(prefix) {
+                    tool.source_url = format!("{prefix}{}", tool.source_url);
+                }
+            }
+        }
         install_target(InstallTargetRequest {
-            target: &target,
+            target: &download_target,
             install_root: &staging_root,
             temp_root: &temp_root,
             asset_root: request.asset_root,
@@ -1116,6 +1125,7 @@ mod tests {
             manifest_json,
             base_root: &base,
             asset_root: Some(&asset_root),
+            download_url_prefix: None,
             reporter: &NoopProgressReporter,
             force_fresh: true,
         });
