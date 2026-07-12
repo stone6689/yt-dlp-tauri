@@ -1,3 +1,4 @@
+mod activation;
 mod archive;
 mod channel;
 mod install;
@@ -10,6 +11,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use activation::{
+    activate_revision, active_state_path, active_tool_paths, read_active_state, revision_root,
+    revisions_root, ActiveToolchainState, REVISION_MANIFEST_FILE,
+};
 pub(crate) use channel::{
     parse_channel_record, select_revision_manifest_asset, sha256_bytes, verify_channel_manifest,
     GitHubRelease,
