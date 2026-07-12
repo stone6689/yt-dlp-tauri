@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 
+import { validateArchivePolicy } from "./archive-contract.mjs";
+
 const SOURCE_ADAPTERS = new Set(["github-release", "redirect-release"]);
 const SOURCE_SELECTIONS = new Set([
   "latest-stable",
@@ -7,14 +9,19 @@ const SOURCE_SELECTIONS = new Set([
   "latest-redirect",
 ]);
 const ASSET_KINDS = new Set(["file", "zip"]);
-const REDISTRIBUTION_EVIDENCE = [
-  "binaryReleaseUrl",
-  "binarySha256",
-  "ffmpegSourceRevision",
-  "buildRepositoryRevision",
-  "checksumUrl",
+const REDISTRIBUTION_FIELDS = [
   "licenseFiles",
+  "requiredEvidence",
+  "noticeFiles",
 ];
+const REDISTRIBUTION_EVIDENCE = new Set([
+  "official-checksum",
+  "binary-release",
+  "source-revision",
+  "build-revision",
+  "source-license",
+  "third-party-notices",
+]);
 
 function requireObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -37,6 +44,29 @@ function requireUniqueStrings(values, label) {
   const normalized = values.map((value, index) =>
     requireNonEmptyString(value, `${label}[${index}]`),
   );
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error(`${label} contains duplicate values`);
+  }
+  return normalized;
+}
+
+function requireSafeRelativePaths(values, label) {
+  if (!Array.isArray(values)) {
+    throw new Error(`${label} must be an array`);
+  }
+  const normalized = values.map((value, index) => {
+    const path = requireNonEmptyString(value, `${label}[${index}]`);
+    const segments = path.replaceAll("\\", "/").split("/");
+    if (
+      path.startsWith("/") ||
+      /^[A-Za-z]:/u.test(path) ||
+      path.includes("\\") ||
+      segments.some((segment) => segment === "" || segment === "." || segment === "..")
+    ) {
+      throw new Error(`${label}[${index}] must be a safe relative path`);
+    }
+    return path;
+  });
   if (new Set(normalized).size !== normalized.length) {
     throw new Error(`${label} contains duplicate values`);
   }
@@ -117,57 +147,40 @@ function validateAsset(assetValue, source, assetIndex, targets, approvedHosts) {
 
 function validateRedistribution(value, sourceId) {
   const redistribution = requireObject(value, `source ${sourceId} redistribution`);
-  if (redistribution.mode !== "conditional-mirror") {
-    throw new Error(`source ${sourceId} redistribution mode must be conditional-mirror`);
-  }
-  redistribution.releaseRepository = requireNonEmptyString(
-    redistribution.releaseRepository,
-    `source ${sourceId} releaseRepository`,
+  const unknown = Object.keys(redistribution).filter(
+    (field) => !REDISTRIBUTION_FIELDS.includes(field),
   );
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(redistribution.releaseRepository)) {
-    throw new Error(`source ${sourceId} has an invalid redistribution releaseRepository`);
+  if (unknown.length > 0) {
+    throw new Error(
+      `source ${sourceId} redistribution has unknown fields: ${unknown.join(", ")}`,
+    );
   }
-  redistribution.releaseTag = requireNonEmptyString(
-    redistribution.releaseTag,
-    `source ${sourceId} releaseTag`,
-  );
-  if (!/^[A-Za-z0-9_.-]+$/.test(redistribution.releaseTag)) {
-    throw new Error(`source ${sourceId} has an invalid redistribution releaseTag`);
-  }
-  redistribution.mirrorNameTemplate = requireNonEmptyString(
-    redistribution.mirrorNameTemplate,
-    `source ${sourceId} mirrorNameTemplate`,
-  );
-  if (
-    !redistribution.mirrorNameTemplate.includes("{revision}") ||
-    /[\\/]/.test(redistribution.mirrorNameTemplate)
-  ) {
-    throw new Error(`source ${sourceId} mirrorNameTemplate must be a versioned filename`);
-  }
-  if (redistribution.fallback !== "upstream") {
-    throw new Error(`source ${sourceId} redistribution fallback must be upstream`);
-  }
-  redistribution.licenseFiles = requireUniqueStrings(
+  const licenseFiles = requireSafeRelativePaths(
     redistribution.licenseFiles,
     `source ${sourceId} redistribution licenseFiles`,
   );
-  redistribution.requiredEvidence = requireUniqueStrings(
+  const noticeFiles = requireSafeRelativePaths(
+    redistribution.noticeFiles,
+    `source ${sourceId} redistribution noticeFiles`,
+  );
+  const requiredEvidence = requireUniqueStrings(
     redistribution.requiredEvidence,
     `source ${sourceId} redistribution requiredEvidence`,
   );
-  if (
-    JSON.stringify([...redistribution.requiredEvidence].sort()) !==
-    JSON.stringify([...REDISTRIBUTION_EVIDENCE].sort())
-  ) {
-    throw new Error(`source ${sourceId} redistribution requiredEvidence is incomplete`);
+  for (const evidence of requiredEvidence) {
+    if (!REDISTRIBUTION_EVIDENCE.has(evidence)) {
+      throw new Error(
+        `source ${sourceId} uses unknown redistribution evidence ${evidence}`,
+      );
+    }
   }
-  return redistribution;
+  return { licenseFiles, requiredEvidence, noticeFiles };
 }
 
 export function validateToolchainPolicy(value) {
   const policy = requireObject(value, "toolchain policy");
-  if (policy.schemaVersion !== 1) {
-    throw new Error("toolchain-policy.json schemaVersion must be 1");
+  if (policy.schemaVersion !== 2) {
+    throw new Error("toolchain-policy.json schemaVersion must be 2");
   }
 
   policy.targets = requireUniqueStrings(policy.targets, "toolchain policy targets");
@@ -209,9 +222,8 @@ export function validateToolchainPolicy(value) {
         throw new Error(`source ${source.id} has invalid GitHub repository`);
       }
     }
-    if (source.redistribution !== undefined) {
-      source.redistribution = validateRedistribution(source.redistribution, source.id);
-    }
+    source.archive = validateArchivePolicy(source.archive, source.id);
+    source.redistribution = validateRedistribution(source.redistribution, source.id);
     if (!Array.isArray(source.assets) || source.assets.length === 0) {
       throw new Error(`source ${source.id} assets must be a non-empty array`);
     }

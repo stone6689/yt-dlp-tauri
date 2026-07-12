@@ -22,9 +22,25 @@ const urls = {
     "https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffprobe.zip",
 };
 
+function archivePolicy() {
+  return {
+    enabled: true,
+    repository: "Chlience/yt-dlp-tauri-toolchain",
+    assetNameTemplate: "{source}-{version}-{assetStem}-{sha256Prefix}{extension}",
+  };
+}
+
+function redistributionPolicy() {
+  return {
+    licenseFiles: [],
+    requiredEvidence: ["binary-release", "source-license"],
+    noticeFiles: ["THIRD-PARTY-NOTICES.md"],
+  };
+}
+
 function fixturePolicy() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     targets: ["win-x64", "macos-arm64"],
     approvedHosts: ["github.com", "ffmpeg.martin-riedl.de"],
     sources: [
@@ -33,6 +49,8 @@ function fixturePolicy() {
         adapter: "github-release",
         selection: "latest-stable",
         repository: "yt-dlp/yt-dlp",
+        archive: archivePolicy(),
+        redistribution: redistributionPolicy(),
         assets: [
           {
             target: "win-x64",
@@ -53,6 +71,8 @@ function fixturePolicy() {
         adapter: "github-release",
         selection: "previous-complete-month",
         repository: "yt-dlp/FFmpeg-Builds",
+        archive: archivePolicy(),
+        redistribution: redistributionPolicy(),
         assets: [
           {
             target: "win-x64",
@@ -79,6 +99,8 @@ function fixturePolicy() {
         id: "ffmpeg-macos-arm64",
         adapter: "redirect-release",
         selection: "latest-redirect",
+        archive: archivePolicy(),
+        redistribution: redistributionPolicy(),
         assets: [
           {
             target: "macos-arm64",
@@ -115,20 +137,16 @@ function fixturePolicy() {
 function withFfmpegRedistribution(policy = fixturePolicy()) {
   const source = policy.sources.find((item) => item.id === "ffmpeg-windows");
   source.redistribution = {
-    mode: "conditional-mirror",
-    releaseRepository: "Chlience/yt-dlp-tauri",
-    releaseTag: "toolchain-stable",
-    mirrorNameTemplate: "ffmpeg-win-x64-{revision}.zip",
-    fallback: "upstream",
     licenseFiles: ["LICENSE", "THIRD-PARTY-NOTICES.md"],
     requiredEvidence: [
-      "binaryReleaseUrl",
-      "binarySha256",
-      "ffmpegSourceRevision",
-      "buildRepositoryRevision",
-      "checksumUrl",
-      "licenseFiles",
+      "official-checksum",
+      "binary-release",
+      "source-revision",
+      "build-revision",
+      "source-license",
+      "third-party-notices",
     ],
+    noticeFiles: ["THIRD-PARTY-NOTICES.md"],
   };
   return policy;
 }
@@ -314,8 +332,7 @@ test("provenance lookup failure keeps the locked upstream fallback", async () =>
   const source = lock.sources.find((item) => item.id === "ffmpeg-windows");
 
   assert.deepEqual(source.redistribution, {
-    mirrorEligible: false,
-    mirrorNameTemplate: "ffmpeg-win-x64-{revision}.zip",
+    archiveEligible: false,
   });
 });
 

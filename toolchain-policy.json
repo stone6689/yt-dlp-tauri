@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "targets": [
     "win-x64",
     "macos-x64",
@@ -18,6 +18,25 @@
       "adapter": "github-release",
       "repository": "yt-dlp/yt-dlp",
       "selection": "latest-stable",
+      "archive": {
+        "enabled": true,
+        "repository": "Chlience/yt-dlp-tauri-toolchain",
+        "assetNameTemplate": "{source}-{version}-{assetStem}-{sha256Prefix}{extension}"
+      },
+      "redistribution": {
+        "licenseFiles": [
+          "LICENSE"
+        ],
+        "requiredEvidence": [
+          "binary-release",
+          "source-revision",
+          "source-license",
+          "third-party-notices"
+        ],
+        "noticeFiles": [
+          "THIRD-PARTY-NOTICES.md"
+        ]
+      },
       "assets": [
         {
           "target": "win-x64",
@@ -62,6 +81,23 @@
       "adapter": "github-release",
       "repository": "denoland/deno",
       "selection": "latest-stable",
+      "archive": {
+        "enabled": true,
+        "repository": "Chlience/yt-dlp-tauri-toolchain",
+        "assetNameTemplate": "{source}-{version}-{assetStem}-{sha256Prefix}{extension}"
+      },
+      "redistribution": {
+        "licenseFiles": [],
+        "requiredEvidence": [
+          "binary-release",
+          "source-revision",
+          "source-license",
+          "third-party-notices"
+        ],
+        "noticeFiles": [
+          "THIRD-PARTY-NOTICES.md"
+        ]
+      },
       "assets": [
         {
           "target": "win-x64",
@@ -109,23 +145,27 @@
       "adapter": "github-release",
       "repository": "yt-dlp/FFmpeg-Builds",
       "selection": "previous-complete-month",
+      "archive": {
+        "enabled": true,
+        "repository": "Chlience/yt-dlp-tauri-toolchain",
+        "assetNameTemplate": "{source}-{version}-{assetStem}-{sha256Prefix}{extension}"
+      },
       "redistribution": {
-        "mode": "conditional-mirror",
-        "releaseRepository": "Chlience/yt-dlp-tauri",
-        "releaseTag": "toolchain-stable",
-        "mirrorNameTemplate": "ffmpeg-win-x64-{revision}.zip",
-        "fallback": "upstream",
         "licenseFiles": [
           "LICENSE",
           "THIRD-PARTY-NOTICES.md"
         ],
         "requiredEvidence": [
-          "binaryReleaseUrl",
-          "binarySha256",
-          "ffmpegSourceRevision",
-          "buildRepositoryRevision",
-          "checksumUrl",
-          "licenseFiles"
+          "official-checksum",
+          "binary-release",
+          "source-revision",
+          "build-revision",
+          "source-license",
+          "third-party-notices"
+        ],
+        "noticeFiles": [
+          "THIRD-PARTY-NOTICES.md",
+          "docs/ffmpeg-redistribution.md"
         ]
       },
       "assets": [
@@ -154,6 +194,29 @@
       "id": "ffmpeg-macos-x64",
       "adapter": "redirect-release",
       "selection": "latest-redirect",
+      "archive": {
+        "enabled": true,
+        "repository": "Chlience/yt-dlp-tauri-toolchain",
+        "assetNameTemplate": "{source}-{version}-{assetStem}-{sha256Prefix}{extension}"
+      },
+      "redistribution": {
+        "licenseFiles": [
+          "LICENSE",
+          "THIRD-PARTY-NOTICES.md"
+        ],
+        "requiredEvidence": [
+          "official-checksum",
+          "binary-release",
+          "source-revision",
+          "build-revision",
+          "source-license",
+          "third-party-notices"
+        ],
+        "noticeFiles": [
+          "THIRD-PARTY-NOTICES.md",
+          "docs/ffmpeg-redistribution.md"
+        ]
+      },
       "assets": [
         {
           "target": "macos-x64",
@@ -187,6 +250,29 @@
       "id": "ffmpeg-macos-arm64",
       "adapter": "redirect-release",
       "selection": "latest-redirect",
+      "archive": {
+        "enabled": true,
+        "repository": "Chlience/yt-dlp-tauri-toolchain",
+        "assetNameTemplate": "{source}-{version}-{assetStem}-{sha256Prefix}{extension}"
+      },
+      "redistribution": {
+        "licenseFiles": [
+          "LICENSE",
+          "THIRD-PARTY-NOTICES.md"
+        ],
+        "requiredEvidence": [
+          "official-checksum",
+          "binary-release",
+          "source-revision",
+          "build-revision",
+          "source-license",
+          "third-party-notices"
+        ],
+        "noticeFiles": [
+          "THIRD-PARTY-NOTICES.md",
+          "docs/ffmpeg-redistribution.md"
+        ]
+      },
       "assets": [
         {
           "target": "macos-arm64",

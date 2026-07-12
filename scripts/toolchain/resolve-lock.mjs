@@ -6,6 +6,10 @@ import {
   resolveFfmpegProvenance,
   verifyFfmpegProvenance,
 } from "./ffmpeg-provenance.mjs";
+import {
+  assignArchiveDescriptors,
+  hasCompleteArchiveDescriptors,
+} from "./archive-contract.mjs";
 import { fetchGitHubReleases } from "./github-releases.mjs";
 import { inspectAsset as inspectAssetDefault } from "./inspect-asset.mjs";
 import { validateToolchainPolicy } from "./policy.mjs";
@@ -361,7 +365,12 @@ async function attachRedistribution({
   githubToken,
 }) {
   const redistribution = policySource.redistribution;
-  if (!redistribution) return lockSource;
+  if (
+    policySource.id !== "ffmpeg-windows" ||
+    !redistribution?.requiredEvidence?.includes("build-revision")
+  ) {
+    return lockSource;
+  }
   let provenance;
   try {
     provenance = await provenanceResolver(lockSource, {
@@ -369,10 +378,10 @@ async function attachRedistribution({
       licenseFiles: redistribution.licenseFiles,
     });
   } catch (error) {
-    if (redistribution.fallback !== "upstream") throw error;
     const previous = currentSource?.redistribution;
-    const currentWithoutRedistribution = { ...currentSource };
+    const currentWithoutRedistribution = structuredClone(currentSource ?? {});
     delete currentWithoutRedistribution.redistribution;
+    for (const asset of currentWithoutRedistribution.assets ?? []) delete asset.archive;
     const sameLockedSource =
       currentSource &&
       JSON.stringify(stableValue(currentWithoutRedistribution)) ===
@@ -386,8 +395,7 @@ async function attachRedistribution({
     );
     if (
       sameLockedSource &&
-      previous?.mirrorEligible === true &&
-      previous.mirrorNameTemplate === redistribution.mirrorNameTemplate &&
+      previous?.archiveEligible === true &&
       sameLicenseFiles &&
       previousEligibility.eligible
     ) {
@@ -399,8 +407,7 @@ async function attachRedistribution({
     return {
       ...lockSource,
       redistribution: {
-        mirrorEligible: false,
-        mirrorNameTemplate: redistribution.mirrorNameTemplate,
+        archiveEligible: false,
       },
     };
   }
@@ -408,8 +415,7 @@ async function attachRedistribution({
   return {
     ...lockSource,
     redistribution: {
-      mirrorEligible: eligibility.eligible,
-      mirrorNameTemplate: redistribution.mirrorNameTemplate,
+      archiveEligible: eligibility.eligible,
       ...(eligibility.eligible ? { provenance } : {}),
     },
   };
@@ -429,7 +435,14 @@ function stableValue(value) {
 
 function lockContent(lock) {
   if (!lock || typeof lock !== "object") return null;
-  const { revision: _revision, generatedAtUtc: _generatedAtUtc, ...content } = lock;
+  const {
+    revision: _revision,
+    generatedAtUtc: _generatedAtUtc,
+    ...content
+  } = structuredClone(lock);
+  for (const source of content.sources ?? []) {
+    for (const asset of source.assets ?? []) delete asset.archive;
+  }
   return stableValue(content);
 }
 
@@ -494,27 +507,41 @@ export async function resolveToolchainLock({
       }
     }
 
-    const candidate = {
-      schemaVersion: 1,
+    const rawCandidate = {
+      schemaVersion: 2,
       targets: [...policy.targets].sort(compareStrings),
       sources: sources.sort((left, right) => compareStrings(left.id, right.id)),
     };
+    const completeArchive = hasCompleteArchiveDescriptors({
+      policy,
+      currentLock,
+      candidateLock: rawCandidate,
+    });
     if (
-      sameContent(candidate, currentLock) &&
+      sameContent(rawCandidate, currentLock) &&
+      completeArchive &&
       typeof currentLock?.revision === "string" &&
       typeof currentLock?.generatedAtUtc === "string"
     ) {
-      return {
-        ...candidate,
-        revision: currentLock.revision,
-        generatedAtUtc: currentLock.generatedAtUtc,
-      };
+      return assignArchiveDescriptors({
+        policy,
+        currentLock,
+        candidateLock: {
+          ...rawCandidate,
+          revision: currentLock.revision,
+          generatedAtUtc: currentLock.generatedAtUtc,
+        },
+      });
     }
-    return {
-      ...candidate,
-      revision: nextRevision(currentLock?.revision, now),
-      generatedAtUtc: now.toISOString(),
-    };
+    return assignArchiveDescriptors({
+      policy,
+      currentLock,
+      candidateLock: {
+        ...rawCandidate,
+        revision: nextRevision(currentLock?.revision, now),
+        generatedAtUtc: now.toISOString(),
+      },
+    });
   } finally {
     if (ownsTempDirectory) {
       await rm(inspectionDirectory, { recursive: true, force: true });

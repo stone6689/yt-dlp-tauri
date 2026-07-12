@@ -260,6 +260,56 @@ export function assignArchiveDescriptors({
   return candidateLock;
 }
 
+export function hasCompleteArchiveDescriptors({
+  policy: policyValue,
+  currentLock,
+  candidateLock: candidateLockValue,
+}) {
+  const policy = requireObject(policyValue, "Toolchain policy");
+  const candidateLock = requireObject(candidateLockValue, "Candidate toolchain lock");
+  if (!Array.isArray(policy.sources) || !Array.isArray(candidateLock.sources)) {
+    throw new Error("Toolchain policy and lock must contain sources arrays");
+  }
+  if (!currentLock || !Array.isArray(currentLock.sources)) return false;
+
+  const policySources = new Map(policy.sources.map((source) => [source.id, source]));
+  const currentSources = new Map(currentLock.sources.map((source) => [source.id, source]));
+  for (const source of candidateLock.sources) {
+    const policySource = policySources.get(source.id);
+    if (!policySource) throw new Error(`Archive policy is missing source ${source.id}`);
+    const archivePolicy = validateArchivePolicy(policySource.archive, source.id);
+    const currentAssets = currentSources.get(source.id)?.assets;
+    if (!Array.isArray(currentAssets)) return false;
+
+    for (const asset of source.assets ?? []) {
+      const key = byteObjectKey(source.id, asset);
+      const matches = currentAssets.filter(
+        (currentAsset) => byteObjectKey(source.id, currentAsset) === key,
+      );
+      if (matches.length === 0) return false;
+      const descriptors = matches
+        .filter(
+          (currentAsset) =>
+            currentAsset.archive?.repository === archivePolicy.repository,
+        )
+        .map((currentAsset) =>
+          validateArchiveDescriptor(currentAsset.archive, {
+            repository: archivePolicy.repository,
+            size: asset.size,
+            sha256: asset.sha256,
+          }),
+        );
+      if (descriptors.length === 0) return false;
+      if (
+        new Set(descriptors.map((descriptor) => descriptorSignature(descriptor))).size !== 1
+      ) {
+        throw new Error(`Conflicting archive descriptors for ${source.id}`);
+      }
+    }
+  }
+  return true;
+}
+
 export const ARCHIVE_CONTRACT = Object.freeze({
   repository: ARCHIVE_REPOSITORY,
   assetNameTemplate: ASSET_NAME_TEMPLATE,

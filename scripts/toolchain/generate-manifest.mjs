@@ -1,3 +1,9 @@
+import {
+  archiveDescriptorUrl,
+  archiveReleaseTag,
+  validateArchiveDescriptor,
+} from "./archive-contract.mjs";
+
 const TARGET_ORDER = ["win-x64", "macos-x64", "macos-arm64"];
 const TOOL_ORDER = ["yt-dlp", "ffmpeg", "ffprobe", "deno"];
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -31,33 +37,37 @@ function runtimeVersion(version) {
   return /^v[0-9]/.test(value) ? value.slice(1) : value;
 }
 
-function manifestSourceUrl(policySource, lockSource, asset, revision, sourceMode) {
-  if (sourceMode === "upstream" || lockSource.redistribution?.mirrorEligible !== true) {
+function requirePositiveInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function requireSha256(value, label) {
+  if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
+    throw new Error(`${label} must be a lowercase SHA-256 digest`);
+  }
+  return value;
+}
+
+function manifestSourceUrl(asset, revision, sourceMode) {
+  if (sourceMode === "upstream") return asset.sourceUrl;
+  if (sourceMode !== "runtime" && sourceMode !== "candidate") {
+    throw new Error(`Unsupported manifest source mode: ${sourceMode}`);
+  }
+  const archive = validateArchiveDescriptor(asset.archive, {
+    repository: "Chlience/yt-dlp-tauri-toolchain",
+    size: asset.size,
+    sha256: asset.sha256,
+  });
+  if (
+    sourceMode === "candidate" &&
+    archive.releaseTag === archiveReleaseTag(revision)
+  ) {
     return asset.sourceUrl;
   }
-  if (sourceMode !== "runtime") throw new Error(`Unsupported manifest source mode: ${sourceMode}`);
-  const redistribution = policySource?.redistribution;
-  if (!redistribution) {
-    throw new Error(`${lockSource.id} is mirror eligible without redistribution policy`);
-  }
-  const template =
-    lockSource.redistribution.mirrorNameTemplate ?? redistribution.mirrorNameTemplate;
-  const mirrorFilename = requireString(template, `${lockSource.id} mirror name template`).replace(
-    "{revision}",
-    revision,
-  );
-  if (mirrorFilename === template || /[\\/]/u.test(mirrorFilename)) {
-    throw new Error(`${lockSource.id} mirror name template must include a safe revision token`);
-  }
-  const repository = requireString(
-    redistribution.releaseRepository,
-    `${lockSource.id} redistribution repository`,
-  );
-  const releaseTag = requireString(
-    redistribution.releaseTag,
-    `${lockSource.id} redistribution release tag`,
-  );
-  return `https://github.com/${repository}/releases/download/${releaseTag}/${mirrorFilename}`;
+  return archiveDescriptorUrl(archive);
 }
 
 function ensureSameValues(left, right, label) {
@@ -90,7 +100,6 @@ export function generateManifest(policy, lock, { sourceMode = "runtime" } = {}) 
   const policySourceIds = requireArray(policy?.sources, "Toolchain policy sources").map(
     (source) => source.id,
   );
-  const policySources = new Map(policy.sources.map((source) => [source.id, source]));
   const lockSources = requireArray(lock.sources, "Toolchain lock sources");
   ensureSameValues(
     policySourceIds,
@@ -101,14 +110,21 @@ export function generateManifest(policy, lock, { sourceMode = "runtime" } = {}) 
   const toolsByTarget = new Map(lockTargets.map((target) => [target, []]));
   const seenTools = new Set();
   for (const source of lockSources) {
-    const policySource = policySources.get(source.id);
     const version = runtimeVersion(source.version);
     for (const asset of requireArray(source.assets, `${source.id} assets`)) {
       const tools = toolsByTarget.get(asset.target);
       if (!tools) throw new Error(`${source.id} uses unknown target ${asset.target}`);
       const sourceUrl = requireString(
-        manifestSourceUrl(policySource, source, asset, lock.revision, sourceMode),
+        manifestSourceUrl(asset, lock.revision, sourceMode),
         `${source.id} source URL`,
+      );
+      const sourceSize = requirePositiveInteger(
+        asset.size,
+        `${source.id} source size`,
+      );
+      const sourceSha256 = requireSha256(
+        asset.sha256,
+        `${source.id} source SHA-256`,
       );
       const parsedUrl = new URL(sourceUrl);
       if (parsedUrl.protocol !== "https:") {
@@ -135,6 +151,8 @@ export function generateManifest(policy, lock, { sourceMode = "runtime" } = {}) 
           name: member.tool,
           path: requireString(member.path, `${key} path`),
           sourceUrl,
+          sourceSize,
+          sourceSha256,
           version,
           sha256: member.sha256,
           kind: asset.kind,
@@ -154,7 +172,7 @@ export function generateManifest(policy, lock, { sourceMode = "runtime" } = {}) 
   const targetComparator = compareByOrder(TARGET_ORDER, "target");
   const toolComparator = compareByOrder(TOOL_ORDER, "name");
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     revision: lock.revision,
     retrievedAtUtc: lock.generatedAtUtc,
     targets: [...toolsByTarget.entries()]

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "targets": [
     "macos-arm64",
     "macos-x64",
@@ -25,6 +25,13 @@
           "kind": "zip",
           "size": 37981362,
           "sha256": "687ae485168ba73a4f1ee3a954eb4f077eca82f2fefd236a6a83a3889287876c",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "deno-v2.9.2-deno-aarch64-apple-darwin-687ae485168ba73a.zip",
+            "size": 37981362,
+            "sha256": "687ae485168ba73a4f1ee3a954eb4f077eca82f2fefd236a6a83a3889287876c"
+          },
           "members": [
             {
               "tool": "deno",
@@ -49,6 +56,13 @@
           "kind": "zip",
           "size": 42336919,
           "sha256": "c953379e5a85a0a30e99aa51b807633e380e809a1181f53e4904d5fa73785bff",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "deno-v2.9.2-deno-x86_64-apple-darwin-c953379e5a85a0a3.zip",
+            "size": 42336919,
+            "sha256": "c953379e5a85a0a30e99aa51b807633e380e809a1181f53e4904d5fa73785bff"
+          },
           "members": [
             {
               "tool": "deno",
@@ -73,6 +87,13 @@
           "kind": "zip",
           "size": 42721120,
           "sha256": "5fe194d26ac5ef77fcc5288c2c438c7a0465f3b6180440ebf04092714bf2dcdf",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "deno-v2.9.2-deno-x86_64-pc-windows-msvc-5fe194d26ac5ef77.zip",
+            "size": 42721120,
+            "sha256": "5fe194d26ac5ef77fcc5288c2c438c7a0465f3b6180440ebf04092714bf2dcdf"
+          },
           "members": [
             {
               "tool": "deno",
@@ -106,6 +127,13 @@
           "kind": "zip",
           "size": 28196358,
           "sha256": "ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "ffmpeg-macos-arm64-8.1.2-ffmpeg-ef1aa60006c7b77c.zip",
+            "size": 28196358,
+            "sha256": "ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c"
+          },
           "members": [
             {
               "tool": "ffmpeg",
@@ -131,6 +159,13 @@
           "kind": "zip",
           "size": 28118222,
           "sha256": "c39787f4af7a3932502d2d48db6f6feaaa836b48a73ef78c32cc3285df61dfaf",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "ffmpeg-macos-arm64-8.1.2-ffprobe-c39787f4af7a3932.zip",
+            "size": 28118222,
+            "sha256": "c39787f4af7a3932502d2d48db6f6feaaa836b48a73ef78c32cc3285df61dfaf"
+          },
           "members": [
             {
               "tool": "ffprobe",
@@ -164,6 +199,13 @@
           "kind": "zip",
           "size": 33586778,
           "sha256": "a52ef43883f44c219766d4b3bdde4e635b35465d0b704c01c3a0566b59775df9",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "ffmpeg-macos-x64-8.1.2-ffmpeg-a52ef43883f44c21.zip",
+            "size": 33586778,
+            "sha256": "a52ef43883f44c219766d4b3bdde4e635b35465d0b704c01c3a0566b59775df9"
+          },
           "members": [
             {
               "tool": "ffmpeg",
@@ -189,6 +231,13 @@
           "kind": "zip",
           "size": 33477267,
           "sha256": "5408ca588c8c72b0dde3afe676d0a7acf25ef97e55ae6eba5c7bede1cda42695",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "ffmpeg-macos-x64-8.1.2-ffprobe-5408ca588c8c72b0.zip",
+            "size": 33477267,
+            "sha256": "5408ca588c8c72b0dde3afe676d0a7acf25ef97e55ae6eba5c7bede1cda42695"
+          },
           "members": [
             {
               "tool": "ffprobe",
@@ -222,6 +271,13 @@
           "kind": "zip",
           "size": 167300768,
           "sha256": "99502f28cb80ab012746e1545463abe061375072c81f500ac5286da11beb00f7",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "ffmpeg-windows-autobuild-2026-06-30-16-38-ffmpeg-N-125365-g9a01c1cb6a-win64-gpl-99502f28cb80ab01.zip",
+            "size": 167300768,
+            "sha256": "99502f28cb80ab012746e1545463abe061375072c81f500ac5286da11beb00f7"
+          },
           "members": [
             {
               "tool": "ffmpeg",
@@ -245,8 +301,7 @@
         }
       ],
       "redistribution": {
-        "mirrorEligible": true,
-        "mirrorNameTemplate": "ffmpeg-win-x64-{revision}.zip",
+        "archiveEligible": true,
         "provenance": {
           "binaryReleaseUrl": "https://github.com/yt-dlp/FFmpeg-Builds/releases/tag/autobuild-2026-06-30-16-38",
           "binarySha256": "99502f28cb80ab012746e1545463abe061375072c81f500ac5286da11beb00f7",
@@ -280,6 +335,13 @@
           "kind": "file",
           "size": 38256544,
           "sha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "yt-dlp-2026.07.04-yt-dlp_macos-498bd0dae17855c5",
+            "size": 38256544,
+            "sha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
+          },
           "members": [
             {
               "tool": "yt-dlp",
@@ -302,6 +364,13 @@
           "kind": "file",
           "size": 38256544,
           "sha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "yt-dlp-2026.07.04-yt-dlp_macos-498bd0dae17855c5",
+            "size": 38256544,
+            "sha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
+          },
           "members": [
             {
               "tool": "yt-dlp",
@@ -324,6 +393,13 @@
           "kind": "file",
           "size": 18226085,
           "sha256": "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260712.1",
+            "assetName": "yt-dlp-2026.07.04-yt-dlp-52fe3c26dcf71fbd.exe",
+            "size": 18226085,
+            "sha256": "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8"
+          },
           "members": [
             {
               "tool": "yt-dlp",
@@ -337,6 +413,6 @@
       ]
     }
   ],
-  "revision": "20260711.2",
-  "generatedAtUtc": "2026-07-11T13:39:24.835Z"
+  "revision": "20260712.1",
+  "generatedAtUtc": "2026-07-12T00:00:00.000Z"
 }

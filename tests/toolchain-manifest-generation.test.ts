@@ -13,17 +13,25 @@ const lock = JSON.parse(
 
 function policyFixture() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     targets: ["win-x64", "macos-arm64"],
     approvedHosts: ["github.com", "ffmpeg.martin-riedl.de"],
-    sources: lock.sources.map((source) => ({ id: source.id })),
+    sources: lock.sources.map((source) => ({
+      id: source.id,
+      archive: {
+        enabled: true,
+        repository: "Chlience/yt-dlp-tauri-toolchain",
+        assetNameTemplate:
+          "{source}-{version}-{assetStem}-{sha256Prefix}{extension}",
+      },
+    })),
   };
 }
 
 test("manifest generation uses extracted hashes and fixed source URLs", () => {
   const manifest = generateManifest(policyFixture(), lock);
 
-  assert.equal(manifest.schemaVersion, 3);
+  assert.equal(manifest.schemaVersion, 4);
   assert.equal(manifest.revision, "20260710.3");
   assert.equal(manifest.retrievedAtUtc, "2026-07-10T04:00:00.000Z");
   assert.deepEqual(
@@ -37,6 +45,12 @@ test("manifest generation uses extracted hashes and fixed source URLs", () => {
   for (const target of manifest.targets) {
     for (const tool of target.tools) {
       assert.doesNotMatch(tool.sourceUrl, /\/latest\//);
+      assert.match(
+        tool.sourceUrl,
+        /^https:\/\/github\.com\/Chlience\/yt-dlp-tauri-toolchain\/releases\/download\/toolchain-/u,
+      );
+      assert.ok(tool.sourceSize > 0);
+      assert.match(tool.sourceSha256, /^[a-f0-9]{64}$/);
       assert.match(tool.sha256, /^[a-f0-9]{64}$/);
     }
   }
@@ -55,34 +69,28 @@ test("production manifest is generated from the production lock", () => {
   assert.deepEqual(manifest, generateManifest(policy, productionLock));
 });
 
-test("mirror-eligible FFmpeg uses project URLs while validation uses upstream", () => {
-  const mirroredLock = structuredClone(lock);
-  const ffmpegSource = mirroredLock.sources.find((source) => source.id === "ffmpeg-windows");
-  ffmpegSource.redistribution = {
-    mirrorEligible: true,
-    mirrorNameTemplate: "ffmpeg-win-x64-{revision}.zip",
-    provenance: { binarySha256: ffmpegSource.assets[0].sha256 },
-  };
-  const policy = policyFixture();
-  policy.sources.find((source) => source.id === "ffmpeg-windows").redistribution = {
-    releaseRepository: "Chlience/yt-dlp-tauri",
-    releaseTag: "toolchain-stable",
-  };
-
-  const runtime = generateManifest(policy, mirroredLock);
-  const validation = generateManifest(policy, mirroredLock, { sourceMode: "upstream" });
-  const runtimeFfmpeg = runtime.targets
-    .find((target) => target.target === "win-x64")
-    .tools.find((tool) => tool.name === "ffmpeg");
-  const validationFfmpeg = validation.targets
-    .find((target) => target.target === "win-x64")
-    .tools.find((tool) => tool.name === "ffmpeg");
-
-  assert.equal(
-    runtimeFfmpeg.sourceUrl,
-    "https://github.com/Chlience/yt-dlp-tauri/releases/download/toolchain-stable/ffmpeg-win-x64-20260710.3.zip",
+test("candidate mode uses upstream only for assets assigned to its revision", () => {
+  const candidateLock = structuredClone(lock);
+  const ffmpegSource = candidateLock.sources.find(
+    (source) => source.id === "ffmpeg-windows",
   );
-  assert.equal(validationFfmpeg.sourceUrl, ffmpegSource.assets[0].sourceUrl);
+  const ytDlpSource = candidateLock.sources.find((source) => source.id === "yt-dlp");
+  ytDlpSource.assets[0].archive.releaseTag = "toolchain-20260709.1";
+  const policy = policyFixture();
+
+  const candidate = generateManifest(policy, candidateLock, { sourceMode: "candidate" });
+  const candidateFfmpeg = candidate.targets
+    .find((target) => target.target === "win-x64")
+    .tools.find((tool) => tool.name === "ffmpeg");
+  const candidateYtDlp = candidate.targets
+    .find((target) => target.target === "win-x64")
+    .tools.find((tool) => tool.name === "yt-dlp");
+
+  assert.equal(candidateFfmpeg.sourceUrl, ffmpegSource.assets[0].sourceUrl);
+  assert.equal(
+    candidateYtDlp.sourceUrl,
+    "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260709.1/yt-dlp-2026.07.04-yt-dlp-aaaaaaaaaaaaaaaa.exe",
+  );
 });
 
 test("toolchain changelog records one revision without app release notes", () => {

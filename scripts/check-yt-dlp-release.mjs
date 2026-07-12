@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+import { archiveDescriptorUrl } from "./toolchain/archive-contract.mjs";
+
 const DEFAULT_LOCK_PATH = "toolchain-lock.json";
 const DEFAULT_MANIFEST_PATH = "src-tauri/tools-manifest.json";
 
@@ -29,7 +31,9 @@ function ytDlpExpectations(lock) {
     }
     expectations.set(asset.target, {
       version: normalizedVersion(source.version),
-      sourceUrl: asset.sourceUrl,
+      sourceUrl: archiveDescriptorUrl(asset.archive),
+      sourceSize: asset.size,
+      sourceSha256: normalizedSha256(asset.sha256),
       sha256: normalizedSha256(members[0].sha256),
     });
   }
@@ -58,6 +62,12 @@ export function evaluateYtDlpManifest(manifest, lock) {
     }
     if (tool.sourceUrl !== expected.sourceUrl) {
       problems.push(`${targetName} yt-dlp sourceUrl differs from toolchain-lock.json`);
+    }
+    if (tool.sourceSize !== expected.sourceSize) {
+      problems.push(`${targetName} yt-dlp sourceSize differs from toolchain-lock.json`);
+    }
+    if (normalizedSha256(tool.sourceSha256) !== expected.sourceSha256) {
+      problems.push(`${targetName} yt-dlp sourceSha256 differs from toolchain-lock.json`);
     }
     if (normalizedSha256(tool.sha256) !== expected.sha256) {
       problems.push(`${targetName} yt-dlp sha256 differs from toolchain-lock.json`);

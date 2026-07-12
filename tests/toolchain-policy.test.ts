@@ -7,6 +7,18 @@ import {
   validateToolchainPolicy,
 } from "../scripts/toolchain/policy.mjs";
 
+const archive = {
+  enabled: true,
+  repository: "Chlience/yt-dlp-tauri-toolchain",
+  assetNameTemplate: "{source}-{version}-{assetStem}-{sha256Prefix}{extension}",
+};
+
+const redistribution = {
+  licenseFiles: [],
+  requiredEvidence: ["binary-release", "source-license"],
+  noticeFiles: ["THIRD-PARTY-NOTICES.md"],
+};
+
 test("production policy covers every populated manifest target", () => {
   const policy = readToolchainPolicy("toolchain-policy.json");
 
@@ -22,21 +34,23 @@ test("production policy covers every populated manifest target", () => {
     ],
   );
   assert.equal(sourceById(policy, "deno").repository, "denoland/deno");
+  for (const source of policy.sources) {
+    assert.deepEqual(source.archive, archive);
+    assert.ok(source.redistribution.requiredEvidence.length > 0);
+    assert.ok(Array.isArray(source.redistribution.licenseFiles));
+    assert.ok(Array.isArray(source.redistribution.noticeFiles));
+  }
   assert.deepEqual(sourceById(policy, "ffmpeg-windows").redistribution, {
-    mode: "conditional-mirror",
-    releaseRepository: "Chlience/yt-dlp-tauri",
-    releaseTag: "toolchain-stable",
-    mirrorNameTemplate: "ffmpeg-win-x64-{revision}.zip",
-    fallback: "upstream",
     licenseFiles: ["LICENSE", "THIRD-PARTY-NOTICES.md"],
     requiredEvidence: [
-      "binaryReleaseUrl",
-      "binarySha256",
-      "ffmpegSourceRevision",
-      "buildRepositoryRevision",
-      "checksumUrl",
-      "licenseFiles",
+      "official-checksum",
+      "binary-release",
+      "source-revision",
+      "build-revision",
+      "source-license",
+      "third-party-notices",
     ],
+    noticeFiles: ["THIRD-PARTY-NOTICES.md", "docs/ffmpeg-redistribution.md"],
   });
 });
 
@@ -44,7 +58,7 @@ test("policy rejects an unapproved source host", () => {
   assert.throws(
     () =>
       validateToolchainPolicy({
-        schemaVersion: 1,
+        schemaVersion: 2,
         targets: ["win-x64"],
         approvedHosts: ["github.com"],
         sources: [
@@ -52,6 +66,8 @@ test("policy rejects an unapproved source host", () => {
             id: "bad",
             adapter: "redirect-release",
             selection: "latest-redirect",
+            archive,
+            redistribution,
             assets: [
               {
                 target: "win-x64",
@@ -73,6 +89,8 @@ test("policy rejects duplicate source identifiers", () => {
     adapter: "github-release",
     repository: "owner/repository",
     selection: "latest-stable",
+    archive,
+    redistribution,
     assets: [
       {
         target: "win-x64",
@@ -92,7 +110,7 @@ test("policy rejects duplicate source identifiers", () => {
   assert.throws(
     () =>
       validateToolchainPolicy({
-        schemaVersion: 1,
+        schemaVersion: 2,
         targets: ["win-x64"],
         approvedHosts: ["github.com"],
         sources: [source, { ...source }],
@@ -101,24 +119,35 @@ test("policy rejects duplicate source identifiers", () => {
   );
 });
 
-test("policy requires versioned mirror filenames and upstream fallback", () => {
+test("policy requires archive declarations for every source", () => {
   const policy = readToolchainPolicy("toolchain-policy.json");
-  const source = structuredClone(sourceById(policy, "ffmpeg-windows"));
-  source.redistribution.mirrorNameTemplate = "ffmpeg.zip";
+  const source = structuredClone(sourceById(policy, "yt-dlp"));
+  delete source.archive;
 
   assert.throws(
     () => validateToolchainPolicy({ ...policy, sources: [source] }),
-    /mirrorNameTemplate must be a versioned filename/u,
+    /source yt-dlp archive must be an object/u,
   );
 });
 
-test("policy requires the complete redistribution evidence set", () => {
+test("policy rejects unknown redistribution evidence", () => {
   const policy = readToolchainPolicy("toolchain-policy.json");
   const source = structuredClone(sourceById(policy, "ffmpeg-windows"));
-  source.redistribution.requiredEvidence.pop();
+  source.redistribution.requiredEvidence.push("unreviewed-evidence");
 
   assert.throws(
     () => validateToolchainPolicy({ ...policy, sources: [source] }),
-    /requiredEvidence is incomplete/u,
+    /unknown redistribution evidence unreviewed-evidence/u,
+  );
+});
+
+test("policy rejects unsafe redistribution paths", () => {
+  const policy = readToolchainPolicy("toolchain-policy.json");
+  const source = structuredClone(sourceById(policy, "deno"));
+  source.redistribution.noticeFiles = ["../NOTICE"];
+
+  assert.throws(
+    () => validateToolchainPolicy({ ...policy, sources: [source] }),
+    /safe relative path/u,
   );
 });

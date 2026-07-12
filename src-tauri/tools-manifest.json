@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 3,
-  "revision": "20260711.2",
-  "retrievedAtUtc": "2026-07-11T13:39:24.835Z",
+  "schemaVersion": 4,
+  "revision": "20260712.1",
+  "retrievedAtUtc": "2026-07-12T00:00:00.000Z",
   "targets": [
     {
       "target": "win-x64",
@@ -9,7 +9,9 @@
         {
           "name": "yt-dlp",
           "path": "Tools/win-x64/yt-dlp/yt-dlp.exe",
-          "sourceUrl": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp.exe",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/yt-dlp-2026.07.04-yt-dlp-52fe3c26dcf71fbd.exe",
+          "sourceSize": 18226085,
+          "sourceSha256": "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8",
           "version": "2026.07.04",
           "sha256": "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8",
           "kind": "file",
@@ -18,7 +20,9 @@
         {
           "name": "ffmpeg",
           "path": "Tools/win-x64/ffmpeg/bin/ffmpeg.exe",
-          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri/releases/download/toolchain-stable/ffmpeg-win-x64-20260711.2.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/ffmpeg-windows-autobuild-2026-06-30-16-38-ffmpeg-N-125365-g9a01c1cb6a-win64-gpl-99502f28cb80ab01.zip",
+          "sourceSize": 167300768,
+          "sourceSha256": "99502f28cb80ab012746e1545463abe061375072c81f500ac5286da11beb00f7",
           "version": "autobuild-2026-06-30-16-38",
           "sha256": "b2663834d9162f6ee431e7d864d8afd7ac385ec289de70463af67beab6f2257e",
           "kind": "zip",
@@ -28,7 +32,9 @@
         {
           "name": "ffprobe",
           "path": "Tools/win-x64/ffmpeg/bin/ffprobe.exe",
-          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri/releases/download/toolchain-stable/ffmpeg-win-x64-20260711.2.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/ffmpeg-windows-autobuild-2026-06-30-16-38-ffmpeg-N-125365-g9a01c1cb6a-win64-gpl-99502f28cb80ab01.zip",
+          "sourceSize": 167300768,
+          "sourceSha256": "99502f28cb80ab012746e1545463abe061375072c81f500ac5286da11beb00f7",
           "version": "autobuild-2026-06-30-16-38",
           "sha256": "3a3525df7f7722e3131a2e0a4c22063f4b2ae50e25a3a2008cf1f7b9f3804aaf",
           "kind": "zip",
@@ -38,7 +44,9 @@
         {
           "name": "deno",
           "path": "Tools/win-x64/deno/deno.exe",
-          "sourceUrl": "https://github.com/denoland/deno/releases/download/v2.9.2/deno-x86_64-pc-windows-msvc.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/deno-v2.9.2-deno-x86_64-pc-windows-msvc-5fe194d26ac5ef77.zip",
+          "sourceSize": 42721120,
+          "sourceSha256": "5fe194d26ac5ef77fcc5288c2c438c7a0465f3b6180440ebf04092714bf2dcdf",
           "version": "2.9.2",
           "sha256": "a5270c2bb75a2ec12fef53185730327267d9e9fe6be6a962c5d1d5a050f93c88",
           "kind": "zip",
@@ -53,7 +61,9 @@
         {
           "name": "yt-dlp",
           "path": "Tools/macos-x64/yt-dlp/yt-dlp",
-          "sourceUrl": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_macos",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/yt-dlp-2026.07.04-yt-dlp_macos-498bd0dae17855c5",
+          "sourceSize": 38256544,
+          "sourceSha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b",
           "version": "2026.07.04",
           "sha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b",
           "kind": "file",
@@ -62,7 +72,9 @@
         {
           "name": "ffmpeg",
           "path": "Tools/macos-x64/ffmpeg/bin/ffmpeg",
-          "sourceUrl": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1783018342_8.1.2/ffmpeg.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/ffmpeg-macos-x64-8.1.2-ffmpeg-a52ef43883f44c21.zip",
+          "sourceSize": 33586778,
+          "sourceSha256": "a52ef43883f44c219766d4b3bdde4e635b35465d0b704c01c3a0566b59775df9",
           "version": "8.1.2",
           "sha256": "1ca59dda73668c59898a0b305afd8a88817a989187f222ec62d64e775d614d23",
           "kind": "zip",
@@ -72,7 +84,9 @@
         {
           "name": "ffprobe",
           "path": "Tools/macos-x64/ffmpeg/bin/ffprobe",
-          "sourceUrl": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1783018342_8.1.2/ffprobe.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/ffmpeg-macos-x64-8.1.2-ffprobe-5408ca588c8c72b0.zip",
+          "sourceSize": 33477267,
+          "sourceSha256": "5408ca588c8c72b0dde3afe676d0a7acf25ef97e55ae6eba5c7bede1cda42695",
           "version": "8.1.2",
           "sha256": "bdb6aff0f1f414382effd97040f7862dc85e67996ac296cb4288beed0e06498f",
           "kind": "zip",
@@ -82,7 +96,9 @@
         {
           "name": "deno",
           "path": "Tools/macos-x64/deno/deno",
-          "sourceUrl": "https://github.com/denoland/deno/releases/download/v2.9.2/deno-x86_64-apple-darwin.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/deno-v2.9.2-deno-x86_64-apple-darwin-c953379e5a85a0a3.zip",
+          "sourceSize": 42336919,
+          "sourceSha256": "c953379e5a85a0a30e99aa51b807633e380e809a1181f53e4904d5fa73785bff",
           "version": "2.9.2",
           "sha256": "201651c6e72bd0df2dbe994b4f8ca0f935631e08c27290a3a92342e02ad0e865",
           "kind": "zip",
@@ -97,7 +113,9 @@
         {
           "name": "yt-dlp",
           "path": "Tools/macos-arm64/yt-dlp/yt-dlp",
-          "sourceUrl": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_macos",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/yt-dlp-2026.07.04-yt-dlp_macos-498bd0dae17855c5",
+          "sourceSize": 38256544,
+          "sourceSha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b",
           "version": "2026.07.04",
           "sha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b",
           "kind": "file",
@@ -106,7 +124,9 @@
         {
           "name": "ffmpeg",
           "path": "Tools/macos-arm64/ffmpeg/bin/ffmpeg",
-          "sourceUrl": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffmpeg.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/ffmpeg-macos-arm64-8.1.2-ffmpeg-ef1aa60006c7b77c.zip",
+          "sourceSize": 28196358,
+          "sourceSha256": "ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c",
           "version": "8.1.2",
           "sha256": "eaf91238e104dd0e262bc6510e25061855cc99a6955a721b0ac99660d58c473d",
           "kind": "zip",
@@ -116,7 +136,9 @@
         {
           "name": "ffprobe",
           "path": "Tools/macos-arm64/ffmpeg/bin/ffprobe",
-          "sourceUrl": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffprobe.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/ffmpeg-macos-arm64-8.1.2-ffprobe-c39787f4af7a3932.zip",
+          "sourceSize": 28118222,
+          "sourceSha256": "c39787f4af7a3932502d2d48db6f6feaaa836b48a73ef78c32cc3285df61dfaf",
           "version": "8.1.2",
           "sha256": "ed9dc5871914b466b96b402c9ec0ba68ce4f836e72faa464b1b4e279835bd4a6",
           "kind": "zip",
@@ -126,7 +148,9 @@
         {
           "name": "deno",
           "path": "Tools/macos-arm64/deno/deno",
-          "sourceUrl": "https://github.com/denoland/deno/releases/download/v2.9.2/deno-aarch64-apple-darwin.zip",
+          "sourceUrl": "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260712.1/deno-v2.9.2-deno-aarch64-apple-darwin-687ae485168ba73a.zip",
+          "sourceSize": 37981362,
+          "sourceSha256": "687ae485168ba73a4f1ee3a954eb4f077eca82f2fefd236a6a83a3889287876c",
           "version": "2.9.2",
           "sha256": "218ab752ae8f64f0a7822af710886488f15169fdae153a3aada4861f9635b266",
           "kind": "zip",

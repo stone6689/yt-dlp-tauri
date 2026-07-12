@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "revision": "20260710.3",
   "generatedAtUtc": "2026-07-10T04:00:00.000Z",
   "targets": [
@@ -26,6 +26,13 @@
           "kind": "zip",
           "size": 10,
           "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260710.3",
+            "assetName": "ffmpeg-macos-arm64-8.1.2-ffmpeg-eeeeeeeeeeeeeeee.zip",
+            "size": 10,
+            "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          },
           "members": [
             {
               "tool": "ffmpeg",
@@ -51,6 +58,13 @@
           "kind": "zip",
           "size": 11,
           "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260710.3",
+            "assetName": "ffmpeg-macos-arm64-8.1.2-ffprobe-ffffffffffffffff.zip",
+            "size": 11,
+            "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          },
           "members": [
             {
               "tool": "ffprobe",
@@ -84,6 +98,13 @@
           "kind": "zip",
           "size": 30,
           "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260710.3",
+            "assetName": "ffmpeg-windows-autobuild-2026-06-30-16-38-ffmpeg-N-125200-gabcdef1234-win64-gpl-bbbbbbbbbbbbbbbb.zip",
+            "size": 30,
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
           "members": [
             {
               "tool": "ffmpeg",
@@ -126,6 +147,13 @@
           "kind": "file",
           "size": 3,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "archive": {
+            "repository": "Chlience/yt-dlp-tauri-toolchain",
+            "releaseTag": "toolchain-20260710.3",
+            "assetName": "yt-dlp-2026.07.04-yt-dlp-aaaaaaaaaaaaaaaa.exe",
+            "size": 3,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
           "members": [
             {
               "tool": "yt-dlp",
