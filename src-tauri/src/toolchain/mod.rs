@@ -20,8 +20,12 @@ pub(crate) use channel::{
     GitHubRelease,
 };
 pub(crate) use install::build_tool_download_client;
-pub use install::{install_target, InstallTargetRequest, NoopProgressReporter, ProgressReporter};
-pub use probe::{probe_target, require_tools};
+pub use install::{
+    install_target, promote_staged_toolchain, stage_target_revision, verify_staged_toolchain,
+    InstallTargetRequest, NoopProgressReporter, ProgressReporter, PromotedToolchain,
+    StageTargetRevisionRequest, StagedToolchain,
+};
+pub use probe::{probe_target, require_tools, verify_toolchain_combination};
 
 pub const TOOLS_DIRECTORY: &str = "Tools";
 

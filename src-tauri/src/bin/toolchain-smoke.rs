@@ -1,8 +1,8 @@
 use serde::Serialize;
 use std::{env, fs, path::PathBuf, process::ExitCode};
 use yt_dlp_tauri_lib::toolchain::{
-    install_target, manifest_target, parse_manifest, probe_target, InstallTargetRequest,
-    NoopProgressReporter, ToolStatus,
+    install_target, manifest_target, parse_manifest, probe_target, verify_toolchain_combination,
+    InstallTargetRequest, NoopProgressReporter, ToolStatus,
 };
 
 #[derive(Debug)]
@@ -54,6 +54,7 @@ fn run() -> Result<(), String> {
         reporter: &NoopProgressReporter,
     })?;
     let tools = probe_target(&paths, &target)?;
+    verify_toolchain_combination(&paths)?;
     let js_runtime_detected = tool_is_available(&tools, "deno");
     let ffmpeg_detected =
         tool_is_available(&tools, "ffmpeg") && tool_is_available(&tools, "ffprobe");

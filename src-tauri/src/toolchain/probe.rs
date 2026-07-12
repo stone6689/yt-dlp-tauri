@@ -2,10 +2,18 @@ use super::{
     install::verify_sha256, relative_manifest_tool_path, ManifestTarget, ManifestTool, ToolPaths,
     ToolStatus,
 };
-use std::{ffi::OsStr, path::Path, process::Command};
+use std::{
+    ffi::OsStr,
+    fs,
+    path::Path,
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const COMBINATION_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn probe_target(paths: &ToolPaths, target: &ManifestTarget) -> Result<Vec<ToolStatus>, String> {
     target
@@ -22,6 +30,144 @@ pub fn require_tools(tools: &ToolPaths) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+pub fn verify_toolchain_combination(paths: &ToolPaths) -> Result<(), String> {
+    require_tools(paths)?;
+    let work_root = std::env::temp_dir().join(format!(
+        "yt-dlp-tauri-combination-probe-{}-{}",
+        std::process::id(),
+        unique_nonce()
+    ));
+    fs::create_dir(&work_root).map_err(|error| {
+        format!(
+            "Failed to create toolchain combination probe directory {}: {error}",
+            work_root.display()
+        )
+    })?;
+
+    let result = (|| {
+        let media_path = work_root.join("probe.mp4");
+        let mut ffmpeg = background_command(&paths.ffmpeg);
+        ffmpeg.args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x64:rate=1",
+            "-t",
+            "1",
+            "-c:v",
+            "mpeg4",
+            "-pix_fmt",
+            "yuv420p",
+        ]);
+        ffmpeg.arg(&media_path);
+        run_bounded_probe(&mut ffmpeg, "FFmpeg local media probe")?;
+
+        let mut ffprobe = background_command(&paths.ffprobe);
+        ffprobe.args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "default=nokey=1:noprint_wrappers=1",
+        ]);
+        ffprobe.arg(&media_path);
+        let ffprobe_output = run_bounded_probe(&mut ffprobe, "FFprobe local media probe")?;
+        if !String::from_utf8_lossy(&ffprobe_output.stdout)
+            .lines()
+            .any(|line| line.trim() == "video")
+        {
+            return Err("FFprobe did not detect the generated video stream".to_string());
+        }
+
+        let media_url = reqwest::Url::from_file_path(&media_path).map_err(|_| {
+            format!(
+                "Failed to convert toolchain probe path to a file URL: {}",
+                media_path.display()
+            )
+        })?;
+        let mut yt_dlp = background_command(&paths.yt_dlp);
+        yt_dlp.args([
+            "--ignore-config",
+            "--no-playlist",
+            "--simulate",
+            "--no-warnings",
+            "--enable-file-urls",
+            "--no-js-runtimes",
+            "--js-runtimes",
+        ]);
+        yt_dlp.arg(format!("deno:{}", paths.deno.display()));
+        yt_dlp.arg("--ffmpeg-location");
+        yt_dlp.arg(&paths.ffmpeg_dir);
+        yt_dlp.arg(media_url.as_str());
+        run_bounded_probe(&mut yt_dlp, "yt-dlp local toolchain probe")?;
+        Ok(())
+    })();
+
+    let cleanup_result = fs::remove_dir_all(&work_root).map_err(|error| {
+        format!(
+            "Failed to clean toolchain combination probe directory {}: {error}",
+            work_root.display()
+        )
+    });
+    match (result, cleanup_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn run_bounded_probe(command: &mut Command, label: &str) -> Result<Output, String> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Failed to start {label}: {error}"))?;
+    let started = Instant::now();
+    loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("Failed to poll {label}: {error}"))?
+        {
+            Some(_) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("Failed to collect {label} output: {error}"))?;
+                if output.status.success() {
+                    return Ok(output);
+                }
+                return Err(process_failure_message(
+                    label,
+                    output.status.code(),
+                    &output.stderr,
+                    &output.stdout,
+                ));
+            }
+            None if started.elapsed() >= COMBINATION_PROBE_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{label} timed out after {} seconds",
+                    COMBINATION_PROBE_TIMEOUT.as_secs()
+                ));
+            }
+            None => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+fn unique_nonce() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
 }
 
 fn probe_manifest_tool(root: &Path, tool: &ManifestTool) -> Result<ToolStatus, String> {

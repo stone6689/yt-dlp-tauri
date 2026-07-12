@@ -1,7 +1,9 @@
 use super::{
     archive::{extract_requested_members, ArchiveMemberRequest},
-    relative_manifest_tool_path, tool_paths_from_manifest, ManifestTarget, ManifestTool,
-    ManifestToolKind, ToolInstallProgress, ToolPaths,
+    manifest_target, parse_manifest, probe_target, relative_manifest_tool_path, revision_root,
+    revisions_root, sha256_bytes, tool_paths_from_manifest, verify_toolchain_combination,
+    ManifestTarget, ManifestTool, ManifestToolKind, ToolInstallProgress, ToolPaths,
+    ToolchainRevision, REVISION_MANIFEST_FILE,
 };
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
@@ -32,6 +34,346 @@ pub struct InstallTargetRequest<'a> {
     pub temp_root: &'a Path,
     pub asset_root: Option<&'a Path>,
     pub reporter: &'a dyn ProgressReporter,
+}
+
+pub struct StageTargetRevisionRequest<'a> {
+    pub target: &'a ManifestTarget,
+    pub manifest_json: &'a str,
+    pub base_root: &'a Path,
+    pub asset_root: Option<&'a Path>,
+    pub reporter: &'a dyn ProgressReporter,
+    pub force_fresh: bool,
+}
+
+pub struct StagedToolchain {
+    target: ManifestTarget,
+    revision: String,
+    manifest_sha256: String,
+    final_root: PathBuf,
+    staging_root: Option<PathBuf>,
+    paths: ToolPaths,
+}
+
+impl StagedToolchain {
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+
+    pub fn paths(&self) -> &ToolPaths {
+        &self.paths
+    }
+}
+
+impl Drop for StagedToolchain {
+    fn drop(&mut self) {
+        if let Some(staging_root) = self.staging_root.take() {
+            let _ = fs::remove_dir_all(staging_root);
+        }
+    }
+}
+
+#[must_use = "promoted toolchains must be committed or rolled back"]
+pub struct PromotedToolchain {
+    pub paths: ToolPaths,
+    pub revision: String,
+    pub manifest_sha256: String,
+    final_root: PathBuf,
+    rollback_root: Option<PathBuf>,
+    backup_root: Option<PathBuf>,
+}
+
+impl PromotedToolchain {
+    pub fn commit(self) {}
+
+    pub fn rollback(mut self) -> Result<(), String> {
+        let Some(rollback_root) = self.rollback_root.take() else {
+            return Ok(());
+        };
+        fs::rename(&self.final_root, &rollback_root).map_err(|error| {
+            format!(
+                "Failed to move rejected toolchain revision {} out of {}: {error}",
+                self.revision,
+                self.final_root.display()
+            )
+        })?;
+        if let Some(backup_root) = self.backup_root.take() {
+            if let Err(error) = fs::rename(&backup_root, &self.final_root) {
+                let restore_new_result = fs::rename(&rollback_root, &self.final_root);
+                return Err(format!(
+                    "Failed to restore previous toolchain revision from {}: {error}. Restoring the verified replacement returned {:?}",
+                    backup_root.display(),
+                    restore_new_result.err()
+                ));
+            }
+        }
+        if rollback_root.exists() {
+            fs::remove_dir_all(&rollback_root).map_err(|error| {
+                format!(
+                    "Failed to clean rejected toolchain revision at {}: {error}",
+                    rollback_root.display()
+                )
+            })?;
+        }
+        Ok(())
+    }
+}
+
+pub fn stage_target_revision(
+    request: StageTargetRevisionRequest<'_>,
+) -> Result<StagedToolchain, String> {
+    let manifest = parse_manifest(request.manifest_json)?;
+    let revision = manifest
+        .revision
+        .as_deref()
+        .ok_or_else(|| "Toolchain manifest is missing revision".to_string())?;
+    let revision = ToolchainRevision::parse(revision)?.to_string();
+    let target = manifest_target(&manifest, &request.target.target)?;
+    let manifest_sha256 = sha256_bytes(request.manifest_json.as_bytes());
+    let final_root = revision_root(request.base_root, &target.target, &revision)?;
+
+    if !request.force_fresh {
+        if let Ok(paths) = verify_revision_files(&final_root, &target, &revision, &manifest_sha256)
+        {
+            return Ok(StagedToolchain {
+                target,
+                revision,
+                manifest_sha256,
+                final_root,
+                staging_root: None,
+                paths,
+            });
+        }
+    }
+
+    let revisions = revisions_root(request.base_root, &target.target);
+    fs::create_dir_all(&revisions).map_err(|error| {
+        format!(
+            "Failed to prepare toolchain revisions directory {}: {error}",
+            revisions.display()
+        )
+    })?;
+    let staging_root = revisions.join(format!(
+        ".staging-{revision}-{}-{}",
+        std::process::id(),
+        unique_nonce()
+    ));
+    fs::create_dir(&staging_root).map_err(|error| {
+        format!(
+            "Failed to create toolchain staging directory {}: {error}",
+            staging_root.display()
+        )
+    })?;
+    let result = (|| {
+        let temp_root = staging_root.join(".downloads");
+        install_target(InstallTargetRequest {
+            target: &target,
+            install_root: &staging_root,
+            temp_root: &temp_root,
+            asset_root: request.asset_root,
+            reporter: request.reporter,
+        })?;
+        if temp_root.exists() {
+            fs::remove_dir_all(&temp_root).map_err(|error| {
+                format!(
+                    "Failed to clean toolchain staging downloads at {}: {error}",
+                    temp_root.display()
+                )
+            })?;
+        }
+        write_staged_manifest(&staging_root, request.manifest_json)?;
+        verify_revision_files(&staging_root, &target, &revision, &manifest_sha256)
+    })();
+    match result {
+        Ok(paths) => Ok(StagedToolchain {
+            target,
+            revision,
+            manifest_sha256,
+            final_root,
+            staging_root: Some(staging_root),
+            paths,
+        }),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging_root);
+            Err(error)
+        }
+    }
+}
+
+pub fn verify_staged_toolchain(staged: &StagedToolchain) -> Result<ToolPaths, String> {
+    let paths = verify_revision_files(
+        staged.paths.root.as_path(),
+        &staged.target,
+        &staged.revision,
+        &staged.manifest_sha256,
+    )?;
+    let statuses = probe_target(&paths, &staged.target)?;
+    if let Some(failed) = statuses
+        .iter()
+        .find(|tool| tool.availability != "available")
+    {
+        return Err(format!(
+            "Staged toolchain probe failed for {}: {}",
+            failed.name,
+            failed
+                .error
+                .as_deref()
+                .unwrap_or(failed.availability.as_str())
+        ));
+    }
+    verify_toolchain_combination(&paths)?;
+    Ok(paths)
+}
+
+pub fn promote_staged_toolchain(mut staged: StagedToolchain) -> Result<PromotedToolchain, String> {
+    let _ = verify_staged_toolchain(&staged)?;
+    let Some(staging_root) = staged.staging_root.take() else {
+        return Ok(PromotedToolchain {
+            paths: staged.paths.clone(),
+            revision: staged.revision.clone(),
+            manifest_sha256: staged.manifest_sha256.clone(),
+            final_root: staged.final_root.clone(),
+            rollback_root: None,
+            backup_root: None,
+        });
+    };
+    let parent = staged
+        .final_root
+        .parent()
+        .ok_or_else(|| "Toolchain revision directory has no parent".to_string())?;
+    let rollback_root = parent.join(format!(
+        ".rollback-{}-{}-{}",
+        staged.revision,
+        std::process::id(),
+        unique_nonce()
+    ));
+    let backup_root = if staged.final_root.exists() {
+        let backup = parent.join(format!(
+            ".previous-{}-{}-{}",
+            staged.revision,
+            std::process::id(),
+            unique_nonce()
+        ));
+        fs::rename(&staged.final_root, &backup).map_err(|error| {
+            format!(
+                "Failed to preserve existing toolchain revision at {}: {error}",
+                staged.final_root.display()
+            )
+        })?;
+        Some(backup)
+    } else {
+        None
+    };
+    if let Err(error) = fs::rename(&staging_root, &staged.final_root) {
+        if let Some(backup) = backup_root.as_ref() {
+            let _ = fs::rename(backup, &staged.final_root);
+        }
+        staged.staging_root = Some(staging_root);
+        return Err(format!(
+            "Failed to promote toolchain revision {} to {}: {error}",
+            staged.revision,
+            staged.final_root.display()
+        ));
+    }
+    let paths = match verify_revision_files(
+        &staged.final_root,
+        &staged.target,
+        &staged.revision,
+        &staged.manifest_sha256,
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            let _ = fs::rename(&staged.final_root, &staging_root);
+            if let Some(backup) = backup_root.as_ref() {
+                let _ = fs::rename(backup, &staged.final_root);
+            }
+            staged.staging_root = Some(staging_root);
+            return Err(error);
+        }
+    };
+
+    Ok(PromotedToolchain {
+        paths,
+        revision: staged.revision.clone(),
+        manifest_sha256: staged.manifest_sha256.clone(),
+        final_root: staged.final_root.clone(),
+        rollback_root: Some(rollback_root),
+        backup_root,
+    })
+}
+
+fn write_staged_manifest(root: &Path, manifest_json: &str) -> Result<(), String> {
+    let path = root.join(REVISION_MANIFEST_FILE);
+    let mut file = fs::File::create(&path).map_err(|error| {
+        format!(
+            "Failed to create staged toolchain manifest {}: {error}",
+            path.display()
+        )
+    })?;
+    file.write_all(manifest_json.as_bytes()).map_err(|error| {
+        format!(
+            "Failed to write staged toolchain manifest {}: {error}",
+            path.display()
+        )
+    })?;
+    file.flush().map_err(|error| {
+        format!(
+            "Failed to flush staged toolchain manifest {}: {error}",
+            path.display()
+        )
+    })?;
+    file.sync_all().map_err(|error| {
+        format!(
+            "Failed to sync staged toolchain manifest {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn verify_revision_files(
+    root: &Path,
+    target: &ManifestTarget,
+    revision: &str,
+    manifest_sha256: &str,
+) -> Result<ToolPaths, String> {
+    let manifest_path = root.join(REVISION_MANIFEST_FILE);
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
+        format!(
+            "Failed to read staged toolchain manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    let actual_manifest_sha256 = sha256_bytes(&manifest_bytes);
+    if actual_manifest_sha256 != manifest_sha256 {
+        return Err(format!(
+            "Staged toolchain manifest SHA-256 mismatch: expected {manifest_sha256}, received {actual_manifest_sha256}"
+        ));
+    }
+    let manifest_json = std::str::from_utf8(&manifest_bytes)
+        .map_err(|error| format!("Staged toolchain manifest is not valid UTF-8: {error}"))?;
+    let manifest = parse_manifest(manifest_json)?;
+    if manifest.revision.as_deref() != Some(revision) {
+        return Err(format!(
+            "Staged toolchain manifest revision does not match {revision}"
+        ));
+    }
+    let stored_target = manifest_target(&manifest, &target.target)?;
+    for tool in &stored_target.tools {
+        let path = root.join(relative_manifest_tool_path(tool)?);
+        if !path.is_file() {
+            return Err(format!(
+                "Staged toolchain is missing {}/{} at {}",
+                stored_target.target,
+                tool.name,
+                path.display()
+            ));
+        }
+        verify_sha256(&path, &tool.sha256)?;
+    }
+    tool_paths_from_manifest(root, &stored_target)
 }
 
 pub fn install_target(request: InstallTargetRequest<'_>) -> Result<ToolPaths, String> {
@@ -739,5 +1081,48 @@ mod tests {
         assert_eq!(resolve_local_source(Some(&root), &archived).unwrap(), None);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_staging_preserves_active_revision_and_tools() {
+        let base = std::env::temp_dir().join(format!(
+            "yt-dlp-tauri-staging-preserves-active-{}",
+            unique_nonce()
+        ));
+        let active_state = base.join("Tools/win-x64/active.json");
+        let active_tool = base.join("Tools/win-x64/revisions/20260711.2/yt-dlp/yt-dlp.exe");
+        let asset_root = base.join("candidate");
+        fs::create_dir_all(active_state.parent().unwrap()).unwrap();
+        fs::create_dir_all(active_tool.parent().unwrap()).unwrap();
+        fs::create_dir_all(asset_root.join("assets")).unwrap();
+        fs::write(&active_state, b"working-state").unwrap();
+        fs::write(&active_tool, b"working-tool").unwrap();
+        let target = ManifestTarget {
+            target: "win-x64".to_string(),
+            tools: vec![local_source_tool(
+                "https://github.com/upstream/tool/releases/download/v1/tool.exe",
+                4,
+                &"a".repeat(64),
+            )],
+        };
+        let manifest_json = r#"{
+          "schemaVersion": 2,
+          "revision": "20260712.1",
+          "targets": [{"target":"win-x64","tools":[]}]
+        }"#;
+
+        let result = stage_target_revision(StageTargetRevisionRequest {
+            target: &target,
+            manifest_json,
+            base_root: &base,
+            asset_root: Some(&asset_root),
+            reporter: &NoopProgressReporter,
+            force_fresh: true,
+        });
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(&active_state).unwrap(), b"working-state");
+        assert_eq!(fs::read(&active_tool).unwrap(), b"working-tool");
+        fs::remove_dir_all(base).unwrap();
     }
 }
