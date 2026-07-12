@@ -3,7 +3,10 @@ mod install;
 mod probe;
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 pub(crate) use install::build_tool_download_client;
 pub use install::{install_target, InstallTargetRequest, NoopProgressReporter, ProgressReporter};
@@ -69,6 +72,8 @@ pub struct ManifestTool {
     pub name: String,
     pub path: String,
     pub source_url: String,
+    pub source_size: Option<u64>,
+    pub source_sha256: Option<String>,
     #[serde(rename = "version")]
     pub version: Option<String>,
     pub sha256: String,
@@ -89,6 +94,45 @@ pub fn parse_manifest(json: &str) -> Result<ToolsManifest, String> {
     let manifest: ToolsManifest = serde_json::from_str(json).map_err(|error| error.to_string())?;
     if manifest.schema_version < 2 {
         return Err("tools-manifest.json schemaVersion must be 2 or newer".to_string());
+    }
+    if manifest.schema_version >= 4 {
+        let mut sources = BTreeMap::<String, (u64, String, ManifestToolKind)>::new();
+        for target in &manifest.targets {
+            for tool in &target.tools {
+                let size = tool.source_size.filter(|value| *value > 0).ok_or_else(|| {
+                    format!(
+                        "tools-manifest.json schemaVersion 4 requires sourceSize for {}/{}",
+                        target.target, tool.name
+                    )
+                })?;
+                let sha256 = tool
+                    .source_sha256
+                    .as_deref()
+                    .filter(|value| {
+                        value.len() == 64
+                            && value
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "tools-manifest.json schemaVersion 4 requires sourceSha256 for {}/{}",
+                            target.target, tool.name
+                        )
+                    })?;
+                let identity = (size, sha256.to_string(), tool.kind);
+                if let Some(existing) = sources.get(&tool.source_url) {
+                    if existing != &identity {
+                        return Err(format!(
+                            "tools-manifest.json has inconsistent source integrity for {}",
+                            tool.source_url
+                        ));
+                    }
+                } else {
+                    sources.insert(tool.source_url.clone(), identity);
+                }
+            }
+        }
     }
     Ok(manifest)
 }
@@ -237,6 +281,8 @@ mod tests {
             name: "yt-dlp".to_string(),
             path: "Tools/win-x64/../../yt-dlp.exe".to_string(),
             source_url: String::new(),
+            source_size: None,
+            source_sha256: None,
             version: None,
             sha256: String::new(),
             kind: ManifestToolKind::File,
@@ -245,5 +291,37 @@ mod tests {
         };
 
         assert!(relative_manifest_tool_path(&tool).is_err());
+    }
+
+    #[test]
+    fn schema_four_requires_source_integrity() {
+        let manifest = r#"{
+          "schemaVersion": 4,
+          "revision": "20260712.1",
+          "targets": [{
+            "target": "win-x64",
+            "tools": [{
+              "name": "yt-dlp",
+              "path": "Tools/win-x64/yt-dlp/yt-dlp.exe",
+              "sourceUrl": "https://example.test/yt-dlp.exe",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "kind": "file"
+            }]
+          }]
+        }"#;
+
+        let error = parse_manifest(manifest).unwrap_err();
+        assert!(error.contains("sourceSize") || error.contains("sourceSha256"));
+    }
+
+    #[test]
+    fn schema_three_keeps_source_integrity_optional() {
+        let manifest = r#"{
+          "schemaVersion": 3,
+          "revision": "20260711.2",
+          "targets": [{"target": "win-x64", "tools": []}]
+        }"#;
+
+        assert!(parse_manifest(manifest).is_ok());
     }
 }

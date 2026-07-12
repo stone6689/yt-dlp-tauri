@@ -119,6 +119,7 @@ fn install_file_tool(
             status: format!("Verifying {}", tool.name),
             tool: Some(tool.name.clone()),
         });
+        verify_manifest_source(&temporary, tool)?;
         verify_sha256(&temporary, &tool.sha256)?;
         mark_executable(&temporary)?;
         replace_file(&temporary, &destination, &tool.name)
@@ -147,6 +148,7 @@ fn install_zip_tools(
         &format!("Downloading {}", zip_group_label(tools)),
         &first.name,
     )?;
+    verify_manifest_source(&archive_path, first)?;
 
     let temporary_paths = tools
         .iter()
@@ -446,6 +448,32 @@ pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
     }
 }
 
+fn verify_manifest_source(path: &Path, tool: &ManifestTool) -> Result<(), String> {
+    match (tool.source_size, tool.source_sha256.as_deref()) {
+        (Some(size), Some(sha256)) => verify_source_file(path, size, sha256),
+        (None, None) => Ok(()),
+        _ => Err(format!(
+            "{} has incomplete source integrity metadata",
+            tool.name
+        )),
+    }
+}
+
+fn verify_source_file(
+    path: &Path,
+    expected_size: u64,
+    expected_sha256: &str,
+) -> Result<(), String> {
+    let actual_size = fs::metadata(path).map_err(|error| error.to_string())?.len();
+    if actual_size != expected_size {
+        return Err(format!(
+            "Downloaded source {} has {actual_size} bytes, expected {expected_size}",
+            path.display()
+        ));
+    }
+    verify_sha256(path, expected_sha256)
+}
+
 fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let mut hasher = Sha256::new();
@@ -538,5 +566,23 @@ mod tests {
             TOOL_DOWNLOAD_MAX_ATTEMPTS
         ));
         assert!(!should_retry_tool_download(&fatal, 1));
+    }
+
+    #[test]
+    fn source_file_requires_exact_size_and_sha256() {
+        let path =
+            std::env::temp_dir().join(format!("yt-dlp-tauri-source-integrity-{}", unique_nonce()));
+        fs::write(&path, b"archive").unwrap();
+        let digest = sha256_file(&path).unwrap();
+
+        assert!(verify_source_file(&path, 7, &digest).is_ok());
+        assert!(verify_source_file(&path, 8, &digest)
+            .unwrap_err()
+            .contains("expected 8"));
+        assert!(verify_source_file(&path, 7, &"a".repeat(64))
+            .unwrap_err()
+            .contains("SHA-256 mismatch"));
+
+        fs::remove_file(path).unwrap();
     }
 }
