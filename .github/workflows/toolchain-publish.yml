@@ -37,14 +37,145 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  handoff:
+    name: Resolve validated pull request bytes
+    if: ${{ github.ref == 'refs/heads/main' && inputs.rollback_revision == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      candidate_artifact_name: ${{ steps.resolve.outputs.candidate_artifact_name }}
+      candidate_artifact_id: ${{ steps.resolve.outputs.candidate_artifact_id }}
+      candidate_artifact_digest: ${{ steps.resolve.outputs.candidate_artifact_digest }}
+      candidate_repository_id: ${{ steps.resolve.outputs.repository_id }}
+      candidate_pull_request: ${{ steps.resolve.outputs.pull_request }}
+      candidate_head_sha: ${{ steps.resolve.outputs.head_sha }}
+      revision: ${{ steps.resolve.outputs.revision }}
+      relay_artifact_id: ${{ steps.relay.outputs.artifact-id }}
+      relay_artifact_digest: ${{ steps.relay.outputs.artifact-digest }}
+
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+
+      - name: Resolve exact pull request artifacts
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/resolve-toolchain-artifact.mjs
+
+      - name: Download exact candidate artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ steps.resolve.outputs.candidate_artifact_name }}
+          path: .toolchain/candidate
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download exact pull request validation report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ steps.resolve.outputs.validation_artifact_name }}
+          path: .toolchain/pr-validation
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify candidate bytes against merged lock
+        env:
+          REPOSITORY_ID: ${{ steps.resolve.outputs.repository_id }}
+          PULL_REQUEST: ${{ steps.resolve.outputs.pull_request }}
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+        run: |
+          node scripts/verify-toolchain-candidate.mjs \
+            --directory .toolchain/candidate \
+            --repository-id "$REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST" \
+            --head-sha "$HEAD_SHA"
+
+      - name: Verify pull request validation identity
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFile } from "node:fs/promises";
+          import { validatePublicationReport } from "./scripts/toolchain/validation-report.mjs";
+
+          const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
+          const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+          const handoff = await readJson(".toolchain/handoff/handoff-report.json");
+          const report = await readJson(
+            ".toolchain/pr-validation/toolchain-validation.json",
+          );
+          const lockBytes = await readFile("toolchain-lock.json");
+          const manifestBytes = await readFile("src-tauri/tools-manifest.json");
+          if (report.runId !== handoff.runId || report.runUrl !== handoff.runUrl) {
+            throw new Error("Pull request validation report run identity does not match handoff");
+          }
+          if (sha256(lockBytes) !== handoff.lockSha256) {
+            throw new Error("Merged toolchain lock digest changed after handoff resolution");
+          }
+          validatePublicationReport(report, {
+            revision: handoff.revision,
+            commitSha: handoff.headSha,
+            manifestSha256: sha256(manifestBytes),
+            lockSha256: handoff.lockSha256,
+            candidate: {
+              artifactName: handoff.candidateArtifact.name,
+              artifactId: handoff.candidateArtifact.id,
+              artifactDigest: handoff.candidateArtifact.digest,
+              repositoryId: handoff.repositoryId,
+              pullRequestNumber: handoff.pullRequestNumber,
+              headSha: handoff.headSha,
+            },
+          });
+          NODE
+
+      - name: Upload verified candidate to main run
+        id: relay
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.resolve.outputs.candidate_artifact_name }}
+          path: .toolchain/candidate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload artifact handoff report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: toolchain-artifact-handoff-${{ steps.resolve.outputs.revision }}
+          path: .toolchain/handoff/handoff-report.json
+          if-no-files-found: error
+          retention-days: 30
+
   validation:
     name: Validate candidate
-    if: ${{ !inputs.skip_revalidation }}
+    needs: handoff
+    if: ${{ always() && !inputs.skip_revalidation && (inputs.rollback_revision != '' || needs.handoff.result == 'success') }}
     permissions:
+      actions: read
       contents: read
     uses: ./.github/workflows/toolchain-validate.yml
     with:
       rollback_revision: ${{ inputs.rollback_revision || '' }}
+      candidate_artifact_name: ${{ needs.handoff.outputs.candidate_artifact_name }}
+      candidate_artifact_id: ${{ needs.handoff.outputs.candidate_artifact_id }}
+      candidate_artifact_digest: ${{ needs.handoff.outputs.candidate_artifact_digest }}
+      candidate_repository_id: ${{ needs.handoff.outputs.candidate_repository_id }}
+      candidate_pull_request: ${{ needs.handoff.outputs.candidate_pull_request }}
+      candidate_head_sha: ${{ needs.handoff.outputs.candidate_head_sha }}
 
   rollback-approval:
     name: Approve revalidation bypass

@@ -92,7 +92,7 @@ jobs:
           PR_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id || '' }}
           PR_NUMBER: ${{ github.event.pull_request.number || '' }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
-          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           if [[ -n "$ROLLBACK_REVISION" ]]; then
@@ -731,7 +731,7 @@ jobs:
         id: aggregate
         continue-on-error: true
         env:
-          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: ${{ github.token }}

@@ -77,7 +77,7 @@ test("publisher validates exact main before promoting immutable assets", () => {
   assert.match(workflow, /uses: \.\/\.github\/workflows\/toolchain-validate\.yml/u);
   assert.match(workflow, /publish:\s*\n\s*name: Publish validated toolchain[\s\S]*?permissions:\s*\n\s*contents: write/u);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/u);
-  assert.match(workflow, /commits\/\$GITHUB_SHA\/pulls/u);
+  assert.match(workflow, /node scripts\/resolve-toolchain-artifact\.mjs/u);
   assert.match(workflow, /git\/ref\/heads\/main/u);
   assert.match(workflow, /toolchain-validation-report/u);
   assert.match(workflow, /toolchain-mirror-candidates/u);
@@ -95,6 +95,32 @@ test("publisher validates exact main before promoting immutable assets", () => {
   const promote = workflow.indexOf("Promote stable channel");
   const compatibility = workflow.indexOf("Update application compatibility manifest");
   assert.ok(upload >= 0 && verify > upload && promote > verify && compatibility > promote);
+});
+
+test("main handoff revalidates one exact pull request candidate artifact", () => {
+  const workflow = readFileSync(".github/workflows/toolchain-publish.yml", "utf8");
+
+  assert.match(
+    workflow,
+    /handoff:\s*\n[\s\S]*?permissions:\s*\n\s*actions: read\s*\n\s*contents: read\s*\n\s*pull-requests: read/u,
+  );
+  assert.match(workflow, /node scripts\/resolve-toolchain-artifact\.mjs/u);
+  assert.match(workflow, /run-id: \$\{\{ steps\.resolve\.outputs\.run_id \}\}/u);
+  assert.match(workflow, /github-token: \$\{\{ github\.token \}\}/u);
+  assert.match(workflow, /node scripts\/verify-toolchain-candidate\.mjs/u);
+  assert.match(workflow, /validatePublicationReport/u);
+  assert.match(workflow, /name: \$\{\{ steps\.resolve\.outputs\.candidate_artifact_name \}\}/u);
+  assert.match(workflow, /retention-days:\s*7/u);
+  assert.match(workflow, /validation:\s*\n[\s\S]*?needs: handoff/u);
+  assert.match(
+    workflow,
+    /candidate_artifact_id: \$\{\{ needs\.handoff\.outputs\.candidate_artifact_id \}\}/u,
+  );
+  assert.match(
+    workflow,
+    /candidate_artifact_digest: \$\{\{ needs\.handoff\.outputs\.candidate_artifact_digest \}\}/u,
+  );
+  assert.doesNotMatch(workflow, /pull_request_target|secrets: inherit/u);
 });
 
 test("rollback revalidates historical revisions unless a protected environment approves a skip", () => {
@@ -154,6 +180,10 @@ test("validation prepares one candidate bundle and reuses it on native runners",
   assert.match(workflow, /needs:\s*prepare-candidate/u);
   assert.match(workflow, /sourceMode:\s*"candidate"/u);
   assert.match(workflow, /--asset-root\s+\.toolchain\/candidate/u);
+  assert.match(
+    workflow,
+    /Merge and validate native reports[\s\S]*?env:\s*\n\s*COMMIT_SHA: \$\{\{ github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/u,
+  );
 });
 
 test("validation workflow runs baseline first and diagnoses source units", () => {
