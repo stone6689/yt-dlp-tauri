@@ -155,6 +155,7 @@ export async function resolveToolchainArtifact({
   }
   const runsPath = new URLSearchParams({
     event: "pull_request",
+    branch: pullRequest.head.ref,
     head_sha: pullRequest.head.sha,
     status: "completed",
     per_page: "100",
@@ -168,6 +169,7 @@ export async function resolveToolchainArtifact({
     workflowId: workflow.id,
     workflowPath,
     headSha: pullRequest.head.sha,
+    headRef: pullRequest.head.ref,
     repositoryId,
     pullRequestNumber: pullRequest.number,
   });

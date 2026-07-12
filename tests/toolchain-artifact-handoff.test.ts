@@ -19,6 +19,7 @@ import {
 const repositoryId = 1250277749;
 const commitSha = "a".repeat(40);
 const headSha = "b".repeat(40);
+const headRef = "feat/toolchain-update";
 const workflowId = 311325680;
 const revision = "20260712.1";
 const lockSha256 = "e".repeat(64);
@@ -35,6 +36,7 @@ function pull(overrides = {}) {
       repo: { id: repositoryId },
     },
     head: {
+      ref: headRef,
       sha: headSha,
       repo: { id: repositoryId },
     },
@@ -50,6 +52,7 @@ function run(overrides = {}) {
     event: "pull_request",
     status: "completed",
     conclusion: "success",
+    head_branch: headRef,
     head_sha: headSha,
     head_repository: { id: repositoryId },
     run_attempt: 2,
@@ -126,6 +129,7 @@ test("validation run selection requires exact workflow, head, repository, and PR
     workflowId,
     workflowPath: ".github/workflows/toolchain-validate.yml",
     headSha,
+    headRef,
     repositoryId,
     pullRequestNumber: 3,
   });
@@ -138,6 +142,34 @@ test("validation run selection requires exact workflow, head, repository, and PR
         workflowId,
         workflowPath: ".github/workflows/toolchain-validate.yml",
         headSha,
+        headRef,
+        repositoryId,
+        pullRequestNumber: 3,
+      }),
+    /successful validation run/u,
+  );
+});
+
+test("validation run selection accepts empty PR associations after merge", () => {
+  const selected = selectValidationRun({
+    runs: [run({ head_branch: headRef, pull_requests: [] })],
+    workflowId,
+    workflowPath: ".github/workflows/toolchain-validate.yml",
+    headSha,
+    headRef,
+    repositoryId,
+    pullRequestNumber: 3,
+  });
+
+  assert.equal(selected.id, 29175682626);
+  assert.throws(
+    () =>
+      selectValidationRun({
+        runs: [run({ head_branch: "other-branch", pull_requests: [] })],
+        workflowId,
+        workflowPath: ".github/workflows/toolchain-validate.yml",
+        headSha,
+        headRef,
         repositoryId,
         pullRequestNumber: 3,
       }),
@@ -261,7 +293,7 @@ test("handoff CLI resolves authenticated REST metadata and writes exact outputs"
       { id: workflowId, path: ".github/workflows/toolchain-validate.yml" },
     ],
     [
-      `/repos/Chlience/yt-dlp-tauri/actions/workflows/${workflowId}/runs?event=pull_request&head_sha=${headSha}&status=completed&per_page=100`,
+      `/repos/Chlience/yt-dlp-tauri/actions/workflows/${workflowId}/runs?event=pull_request&branch=feat%2Ftoolchain-update&head_sha=${headSha}&status=completed&per_page=100`,
       { workflow_runs: [run()] },
     ],
     [

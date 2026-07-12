@@ -105,6 +105,7 @@ export function resolveMergedPullRequest({ pulls, commitSha, repositoryId, baseR
 
 function runMatchesPullRequest(run, pullRequestNumber, headSha, repositoryId) {
   if (!Array.isArray(run.pull_requests)) return false;
+  if (run.pull_requests.length === 0) return true;
   const matches = run.pull_requests.filter(
     (pull) =>
       pull?.number === pullRequestNumber &&
@@ -126,12 +127,14 @@ export function selectValidationRun({
   workflowId,
   workflowPath,
   headSha,
+  headRef,
   repositoryId,
   pullRequestNumber,
 }) {
   const expectedWorkflowId = requireIdentifier(workflowId, "Validation workflow ID");
   const expectedWorkflowPath = requireString(workflowPath, "Validation workflow path");
   const expectedHeadSha = requireCommitSha(headSha, "Pull request head SHA");
+  const expectedHeadRef = requireString(headRef, "Pull request head ref");
   const expectedRepositoryId = requireIdentifier(repositoryId, "Repository ID");
   const expectedPullRequest = requirePositiveInteger(
     pullRequestNumber,
@@ -147,6 +150,7 @@ export function selectValidationRun({
         run.status === "completed" &&
         run.conclusion === "success" &&
         run.head_sha === expectedHeadSha &&
+        run.head_branch === expectedHeadRef &&
         identifierEquals(run.head_repository?.id, expectedRepositoryId) &&
         Number.isSafeInteger(run.id) &&
         run.id > 0 &&
