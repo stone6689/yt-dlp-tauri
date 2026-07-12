@@ -288,14 +288,9 @@ fn atomic_replace(temporary: &Path, destination: &Path) -> Result<(), String> {
     let parent = destination
         .parent()
         .ok_or_else(|| "Active toolchain state has no parent directory".to_string())?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| {
-            format!(
-                "Failed to sync active toolchain state directory {}: {error}",
-                parent.display()
-            )
-        })
+    // Rename is the commit point; a later directory-sync error cannot be reported as a rollback-safe failure.
+    let _ = File::open(parent).and_then(|directory| directory.sync_all());
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -303,7 +298,6 @@ fn atomic_replace(temporary: &Path, destination: &Path) -> Result<(), String> {
     use std::{iter, os::windows::ffi::OsStrExt, ptr};
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-        REPLACEFILE_WRITE_THROUGH,
     };
 
     let temporary_wide = temporary
@@ -322,7 +316,7 @@ fn atomic_replace(temporary: &Path, destination: &Path) -> Result<(), String> {
                 destination_wide.as_ptr(),
                 temporary_wide.as_ptr(),
                 ptr::null(),
-                REPLACEFILE_WRITE_THROUGH,
+                0,
                 ptr::null(),
                 ptr::null(),
             )

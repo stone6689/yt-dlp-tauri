@@ -95,6 +95,12 @@ export function summarizeRemoteTools(
   localRevision: string | null,
   remoteRevision: string | null,
 ): ToolSummary {
+  if (remoteRevision) {
+    compareToolchainRevisions(remoteRevision, remoteRevision);
+  }
+  if (localRevision) {
+    compareToolchainRevisions(localRevision, localRevision);
+  }
   const summary = summarizeTools(tools, "remote");
   if (summary.action || !remoteRevision) {
     return summary;
@@ -143,6 +149,14 @@ function parseToolchainRevision(value: string): { date: string; sequence: bigint
 
   return {
     date: `${yearText}${monthText}${dayText}`,
-    sequence: BigInt(sequenceText),
+    sequence: parseRevisionSequence(sequenceText, value),
   };
+}
+
+function parseRevisionSequence(sequenceText: string, revision: string): bigint {
+  const sequence = BigInt(sequenceText);
+  if (sequence > 4_294_967_295n) {
+    throw new Error(`Invalid toolchain revision: ${revision}`);
+  }
+  return sequence;
 }

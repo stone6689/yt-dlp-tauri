@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  compareToolchainRevisions,
   parseChannelRecord,
   renderChannelRecord,
   selectManifestAsset,
@@ -87,6 +88,17 @@ test("channel parser rejects unterminated markers and uppercase digests", () => 
     sha256: "A".repeat(64),
   })}\n-->\n`;
   assert.throws(() => parseChannelRecord(uppercase), /lowercase SHA-256/u);
+
+  for (const revision of ["20260229.1", "20260712.4294967296"]) {
+    const invalidRevision = `<!-- toolchain-channel\n${JSON.stringify({
+      ...channelFixture(),
+      revision,
+      releaseTag: `toolchain-${revision}`,
+      manifest: `tools-manifest-${revision}.json`,
+    })}\n-->\n`;
+    assert.throws(() => parseChannelRecord(invalidRevision), /Invalid toolchain channel revision/u);
+  }
+  assert.equal(compareToolchainRevisions("20260712.4294967295", "20260712.1"), 1);
 });
 
 test("manifest asset selection requires one exact HTTPS asset", () => {

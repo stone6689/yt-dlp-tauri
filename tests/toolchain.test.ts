@@ -57,6 +57,7 @@ test("remote archive revision produces update only when newer", () => {
   assert.equal(compareToolchainRevisions("20260712.1", "20260712.1"), 0);
   assert.equal(compareToolchainRevisions("20260711.2", "20260712.1"), -1);
   assert.throws(() => compareToolchainRevisions("20260229.1", "20260712.1"));
+  assert.throws(() => compareToolchainRevisions("20260712.4294967296", "20260712.1"));
 });
 
 test("new archive revision updates matching installed bytes", () => {
@@ -67,5 +68,8 @@ test("new archive revision updates matching installed bytes", () => {
   assert.equal(
     summarizeRemoteTools([tool("available")], "20260712.1", "20260712.1").action,
     null,
+  );
+  assert.throws(() =>
+    summarizeRemoteTools([tool("missing")], null, "20261301.1"),
   );
 });

@@ -112,6 +112,7 @@ test("archive channel rejects a mutable revision release", async () => {
   await assert.rejects(
     fetchStableToolchainManifest({ fetchImpl }),
     (error: unknown) =>
-      error instanceof ArchiveChannelError && error.failureClass === "archive-integrity",
+      error instanceof ArchiveChannelError &&
+      error.failureClass === "archive-integrity",
   );
 });

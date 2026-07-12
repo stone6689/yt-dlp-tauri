@@ -112,7 +112,10 @@ export function selectManifestAsset(release, record) {
 export function compareToolchainRevisions(left, right) {
   const [leftDate, leftSequence] = revisionParts(left);
   const [rightDate, rightSequence] = revisionParts(right);
-  return leftDate.localeCompare(rightDate) || leftSequence - rightSequence;
+  const dateOrder = leftDate.localeCompare(rightDate);
+  if (dateOrder !== 0) return dateOrder < 0 ? -1 : 1;
+  if (leftSequence === rightSequence) return 0;
+  return leftSequence < rightSequence ? -1 : 1;
 }
 
 function normalizeChannelRecord(record) {
@@ -132,7 +135,9 @@ function normalizeChannelRecord(record) {
   if (record.schemaVersion !== 1 && record.schemaVersion !== 2) {
     throw new Error(`Unsupported toolchain channel schema: ${record.schemaVersion}`);
   }
-  if (!REVISION_PATTERN.test(record.revision ?? "")) {
+  try {
+    revisionParts(record.revision);
+  } catch {
     throw new Error(`Invalid toolchain channel revision: ${record.revision}`);
   }
   const expectedManifest = `tools-manifest-${record.revision}.json`;
@@ -200,7 +205,23 @@ function revisionParts(value) {
     throw new Error(`Invalid toolchain revision: ${value}`);
   }
   const [date, sequence] = value.split(".");
-  return [date, Number(sequence)];
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(4, 6));
+  const day = Number(date.slice(6, 8));
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const parsedSequence = BigInt(sequence);
+  if (
+    year === 0 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    parsedSequence > 4_294_967_295n
+  ) {
+    throw new Error(`Invalid toolchain revision: ${value}`);
+  }
+  return [date, parsedSequence];
 }
 
 function requireBody(value) {

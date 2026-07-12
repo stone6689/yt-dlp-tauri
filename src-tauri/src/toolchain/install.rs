@@ -239,6 +239,7 @@ pub fn verify_staged_toolchain(staged: &StagedToolchain) -> Result<ToolPaths, St
 
 pub fn promote_staged_toolchain(mut staged: StagedToolchain) -> Result<PromotedToolchain, String> {
     let _ = verify_staged_toolchain(&staged)?;
+    let promoted_paths = tool_paths_from_manifest(&staged.final_root, &staged.target)?;
     let Some(staging_root) = staged.staging_root.take() else {
         return Ok(PromotedToolchain {
             paths: staged.paths.clone(),
@@ -277,35 +278,25 @@ pub fn promote_staged_toolchain(mut staged: StagedToolchain) -> Result<PromotedT
         None
     };
     if let Err(error) = fs::rename(&staging_root, &staged.final_root) {
-        if let Some(backup) = backup_root.as_ref() {
-            let _ = fs::rename(backup, &staged.final_root);
-        }
         staged.staging_root = Some(staging_root);
+        if let Some(backup) = backup_root.as_ref() {
+            fs::rename(backup, &staged.final_root).map_err(|restore_error| {
+                format!(
+                    "Failed to promote toolchain revision {}: {error}. Restoring {} also failed: {restore_error}",
+                    staged.revision,
+                    backup.display()
+                )
+            })?;
+        }
         return Err(format!(
             "Failed to promote toolchain revision {} to {}: {error}",
             staged.revision,
             staged.final_root.display()
         ));
     }
-    let paths = match verify_revision_files(
-        &staged.final_root,
-        &staged.target,
-        &staged.revision,
-        &staged.manifest_sha256,
-    ) {
-        Ok(paths) => paths,
-        Err(error) => {
-            let _ = fs::rename(&staged.final_root, &staging_root);
-            if let Some(backup) = backup_root.as_ref() {
-                let _ = fs::rename(backup, &staged.final_root);
-            }
-            staged.staging_root = Some(staging_root);
-            return Err(error);
-        }
-    };
 
     Ok(PromotedToolchain {
-        paths,
+        paths: promoted_paths,
         revision: staged.revision.clone(),
         manifest_sha256: staged.manifest_sha256.clone(),
         final_root: staged.final_root.clone(),
@@ -1133,6 +1124,108 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(fs::read(&active_state).unwrap(), b"working-state");
         assert_eq!(fs::read(&active_tool).unwrap(), b"working-tool");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn script_tool(asset_root: &Path, name: &str, path: &str, script: &str) -> ManifestTool {
+        let digest = format!("{:x}", Sha256::digest(script.as_bytes()));
+        fs::create_dir_all(asset_root.join("assets")).unwrap();
+        fs::write(asset_root.join("assets").join(&digest), script).unwrap();
+        ManifestTool {
+            name: name.to_string(),
+            path: path.to_string(),
+            source_url: format!("https://example.test/{name}"),
+            source_size: Some(script.len() as u64),
+            source_sha256: Some(digest.clone()),
+            version: Some("fixture".to_string()),
+            sha256: digest,
+            kind: ManifestToolKind::File,
+            archive_path_suffix: None,
+            license_notes: None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn staged_script_toolchain(
+        base: &Path,
+        revision: &str,
+        marker: &str,
+        force_fresh: bool,
+    ) -> StagedToolchain {
+        let asset_root = base.join(format!("candidate-{marker}"));
+        let target = ManifestTarget {
+            target: "macos-x64".to_string(),
+            tools: vec![
+                script_tool(
+                    &asset_root,
+                    "yt-dlp",
+                    "Tools/macos-x64/yt-dlp/yt-dlp",
+                    &format!(
+                        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo yt-dlp-{marker}; fi\nexit 0\n"
+                    ),
+                ),
+                script_tool(
+                    &asset_root,
+                    "ffmpeg",
+                    "Tools/macos-x64/ffmpeg/bin/ffmpeg",
+                    "#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then echo ffmpeg-fixture; exit 0; fi\nfor output; do :; done\nprintf media > \"$output\"\n",
+                ),
+                script_tool(
+                    &asset_root,
+                    "ffprobe",
+                    "Tools/macos-x64/ffmpeg/bin/ffprobe",
+                    "#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then echo ffprobe-fixture; else echo video; fi\n",
+                ),
+                script_tool(
+                    &asset_root,
+                    "deno",
+                    "Tools/macos-x64/deno/deno",
+                    "#!/bin/sh\necho deno-fixture\n",
+                ),
+            ],
+        };
+        let manifest_json = serde_json::json!({
+            "schemaVersion": 2,
+            "revision": revision,
+            "targets": [target.clone()],
+        })
+        .to_string();
+
+        stage_target_revision(StageTargetRevisionRequest {
+            target: &target,
+            manifest_json: &manifest_json,
+            base_root: base,
+            asset_root: Some(&asset_root),
+            download_url_prefix: None,
+            reporter: &NoopProgressReporter,
+            force_fresh,
+        })
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn promoted_revision_rollback_restores_previous_tool_bytes() {
+        let base = std::env::temp_dir().join(format!(
+            "yt-dlp-tauri-promotion-rollback-{}",
+            unique_nonce()
+        ));
+        fs::create_dir_all(&base).unwrap();
+        let first =
+            promote_staged_toolchain(staged_script_toolchain(&base, "20260712.1", "old", false))
+                .unwrap();
+        let yt_dlp = first.paths.yt_dlp.clone();
+        first.commit();
+        assert!(fs::read_to_string(&yt_dlp).unwrap().contains("yt-dlp-old"));
+
+        let replacement =
+            promote_staged_toolchain(staged_script_toolchain(&base, "20260712.1", "new", true))
+                .unwrap();
+        assert!(fs::read_to_string(&yt_dlp).unwrap().contains("yt-dlp-new"));
+
+        replacement.rollback().unwrap();
+        assert!(fs::read_to_string(&yt_dlp).unwrap().contains("yt-dlp-old"));
         fs::remove_dir_all(base).unwrap();
     }
 }

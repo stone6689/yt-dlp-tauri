@@ -26,16 +26,28 @@ export async function fetchStableToolchainManifest({
   const stableUrl = `https://api.github.com/repos/${repository}/releases/tags/toolchain-stable`;
   const stableResponse = await request(stableUrl, { headers }, fetchImpl);
   if (stableResponse.status === 404) return { status: "missing" };
-  requireResponse(stableResponse, "archive-unavailable", "Stable archive channel lookup");
-  const stableRelease = await responseJson(stableResponse, "Stable archive channel");
+  requireResponse(
+    stableResponse,
+    "archive-unavailable",
+    "Stable archive channel lookup",
+  );
+  const stableRelease = await responseJson(
+    stableResponse,
+    "Stable archive channel",
+  );
   let channel;
   try {
     channel = parseChannelRecord(stableRelease.body ?? "");
   } catch (error) {
-    throw integrityError(`Stable archive channel is invalid: ${error.message}`, error);
+    throw integrityError(
+      `Stable archive channel is invalid: ${error.message}`,
+      error,
+    );
   }
   if (channel.schemaVersion !== 2 || channel.repository !== repository) {
-    throw integrityError("Stable archive channel must use schema 2 and the configured repository");
+    throw integrityError(
+      "Stable archive channel must use schema 2 and the configured repository",
+    );
   }
 
   const release = await fetchToolchainRevisionRelease({
@@ -46,13 +58,18 @@ export async function fetchStableToolchainManifest({
     userAgent,
   });
   if (release.tag_name !== channel.releaseTag) {
-    throw integrityError(`Revision release tag does not match ${channel.releaseTag}`);
+    throw integrityError(
+      `Revision release tag does not match ${channel.releaseTag}`,
+    );
   }
   let asset;
   try {
     asset = selectManifestAsset(release, channel);
   } catch (error) {
-    throw integrityError(`Stable manifest asset is invalid: ${error.message}`, error);
+    throw integrityError(
+      `Stable manifest asset is invalid: ${error.message}`,
+      error,
+    );
   }
   const downloaded = await downloadVerifiedReleaseAsset({
     release,
@@ -95,8 +112,15 @@ export async function fetchToolchainRevisionRelease({
     { headers: githubHeaders(token, userAgent) },
     fetchImpl,
   );
-  requireResponse(response, "archive-unavailable", `Archive revision ${releaseTag} lookup`);
-  const release = await responseJson(response, `Archive revision ${releaseTag}`);
+  requireResponse(
+    response,
+    "archive-unavailable",
+    `Archive revision ${releaseTag} lookup`,
+  );
+  const release = await responseJson(
+    response,
+    `Archive revision ${releaseTag}`,
+  );
   if (
     release.tag_name !== releaseTag ||
     release.draft !== false ||
@@ -104,7 +128,9 @@ export async function fetchToolchainRevisionRelease({
     release.immutable !== true ||
     !Array.isArray(release.assets)
   ) {
-    throw integrityError(`Archive revision ${releaseTag} must be published and immutable`);
+    throw integrityError(
+      `Archive revision ${releaseTag} must be published and immutable`,
+    );
   }
   return release;
 }
@@ -121,7 +147,9 @@ export async function downloadVerifiedReleaseAsset({
   const releaseTag = requireImmutableRelease(release);
   const matches = release.assets.filter((asset) => asset?.name === name);
   if (matches.length !== 1) {
-    throw integrityError(`Expected exactly one archive asset named ${name}, found ${matches.length}`);
+    throw integrityError(
+      `Expected exactly one archive asset named ${name}, found ${matches.length}`,
+    );
   }
   const asset = matches[0];
   const expectedDigest = normalizeAsset(asset, repository, releaseTag, name);
@@ -130,7 +158,11 @@ export async function downloadVerifiedReleaseAsset({
     { headers: githubHeaders(token, userAgent) },
     fetchImpl,
   );
-  requireResponse(response, "archive-unavailable", `Archive asset ${name} download`);
+  requireResponse(
+    response,
+    "archive-unavailable",
+    `Archive asset ${name} download`,
+  );
   const bytes = Buffer.from(await response.arrayBuffer());
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   if (bytes.length !== asset.size || sha256 !== expectedDigest) {
@@ -150,16 +182,22 @@ export function verifyArchiveManifestBytes(channel, bytes) {
   }
   let manifest;
   try {
-    manifest = JSON.parse(bytes.toString("utf8"));
+    const json = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    manifest = JSON.parse(json);
   } catch (error) {
-    throw integrityError(`Archive manifest contains invalid JSON: ${error.message}`, error);
+    throw integrityError(
+      `Archive manifest is not valid UTF-8 JSON: ${error.message}`,
+      error,
+    );
   }
   if (
     manifest?.schemaVersion !== 4 ||
     manifest.revision !== channel.revision ||
     !Array.isArray(manifest.targets)
   ) {
-    throw integrityError("Archive manifest schema or revision does not match the stable channel");
+    throw integrityError(
+      "Archive manifest schema or revision does not match the stable channel",
+    );
   }
   const sourcePrefix = `https://github.com/${channel.repository}/releases/download/${channel.releaseTag}/`;
   const sourcePathPrefix = `/${channel.repository}/releases/download/${channel.releaseTag}/`;
@@ -193,7 +231,9 @@ export function verifyArchiveManifestBytes(channel, bytes) {
         !SHA256_PATTERN.test(tool.sourceSha256 ?? "") ||
         !SHA256_PATTERN.test(tool.sha256 ?? "")
       ) {
-        throw integrityError(`Archive manifest contains invalid runtime bytes for ${target.target}/${tool?.name}`);
+        throw integrityError(
+          `Archive manifest contains invalid runtime bytes for ${target.target}/${tool?.name}`,
+        );
       }
     }
   }
@@ -215,12 +255,21 @@ function requireImmutableRelease(release) {
 }
 
 function normalizeAsset(asset, repository, releaseTag, name) {
-  if (!Number.isSafeInteger(asset.id) || asset.id <= 0 || !Number.isSafeInteger(asset.size) || asset.size <= 0) {
-    throw integrityError(`Archive asset ${name} must have a positive ID and byte size`);
+  if (
+    !Number.isSafeInteger(asset.id) ||
+    asset.id <= 0 ||
+    !Number.isSafeInteger(asset.size) ||
+    asset.size <= 0
+  ) {
+    throw integrityError(
+      `Archive asset ${name} must have a positive ID and byte size`,
+    );
   }
   const expectedDigest = String(asset.digest ?? "").replace(/^sha256:/u, "");
   if (!SHA256_PATTERN.test(expectedDigest)) {
-    throw integrityError(`Archive asset ${name} must have a lowercase SHA-256 digest`);
+    throw integrityError(
+      `Archive asset ${name} must have a lowercase SHA-256 digest`,
+    );
   }
   let url;
   try {
@@ -238,7 +287,9 @@ function normalizeAsset(asset, repository, releaseTag, name) {
     url.hash ||
     url.pathname !== expectedPath
   ) {
-    throw integrityError(`Archive asset ${name} URL does not match ${releaseTag}`);
+    throw integrityError(
+      `Archive asset ${name} URL does not match ${releaseTag}`,
+    );
   }
   return expectedDigest;
 }
@@ -281,7 +332,10 @@ async function responseJson(response, label) {
   try {
     return await response.json();
   } catch (error) {
-    throw integrityError(`${label} returned invalid JSON: ${error.message}`, error);
+    throw integrityError(
+      `${label} returned invalid JSON: ${error.message}`,
+      error,
+    );
   }
 }
 
@@ -300,8 +354,29 @@ function requireRevision(revision) {
   const month = Number(date.slice(4, 6));
   const day = Number(date.slice(6, 8));
   const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (year === 0 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) {
+  const daysInMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  const sequence = BigInt(revision.split(".")[1]);
+  if (
+    year === 0 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    sequence > 4_294_967_295n
+  ) {
     throw new Error(`Invalid toolchain revision: ${revision}`);
   }
 }
