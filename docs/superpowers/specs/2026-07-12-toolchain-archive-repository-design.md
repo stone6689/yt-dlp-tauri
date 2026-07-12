@@ -156,7 +156,7 @@ Every source in `toolchain-policy.json` gains an archive and redistribution poli
   "archive": {
     "enabled": true,
     "repository": "Chlience/yt-dlp-tauri-toolchain",
-    "assetNameTemplate": "{source}-{target}-{version}-{sha256Prefix}.{extension}"
+    "assetNameTemplate": "{source}-{version}-{assetStem}-{sha256Prefix}{extension}"
   },
   "redistribution": {
     "licenseFiles": [],
@@ -196,6 +196,12 @@ historical release tag. For changed assets, it predicts the current revision tag
 deterministic asset name. Publication proves that every predicted URL exists before
 promotion.
 
+Archive identity follows the unique upstream byte object, not each target reference.
+When two targets reference the same upstream URL, size, and SHA-256, they receive the
+same archive descriptor and one release asset. Target-specific upstream asset names
+remain distinguishable through `assetStem`. This is required for the shared universal
+macOS yt-dlp executable to be archived once.
+
 This provides incremental deduplication. Returning to an older digest may upload a
 duplicate if that asset is no longer present in the active lock; global historical
 deduplication is deferred.
@@ -209,9 +215,12 @@ https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/
   toolchain-20260712.1/<asset-name>
 ```
 
-Validation manifest generation uses upstream URLs with the same expected archive
-and extracted-file hashes. The checked-in runtime manifest remains byte-identical
-to the published revision manifest.
+Candidate validation uses verified local bundle bytes for descriptors assigned to
+the proposed revision. Descriptors reused from historical revisions keep their
+archive URLs during validation. Upstream URLs remain acquisition provenance in the
+lock and candidate index, but native validation does not contact an upstream host
+for a byte object that is already archived. The checked-in runtime manifest remains
+byte-identical to the published revision manifest.
 
 ## Candidate Bundle
 
@@ -241,7 +250,9 @@ evidence. Publication depends on the candidate's supply-chain, executable, DASH,
 and project checks. If the candidate also fails, validation fails.
 
 Each successful PR run records the bundle artifact ID, digest, workflow run ID, PR
-head SHA, merge SHA, and revision in its canonical validation report.
+number, PR head SHA, head repository ID, and revision in its canonical validation
+report. A PR run cannot know its future merge commit. The main handoff report adds
+the exact merged `main` SHA after resolving the associated pull request.
 
 ## Merge and Main Validation
 
@@ -252,6 +263,10 @@ Before invoking the reusable native workflow, the main publication workflow:
 3. Requires one candidate artifact with the expected revision.
 4. Downloads it with `actions:read` permission.
 5. Verifies `candidate-assets.json` and every file against the merged lock.
+
+The selected run must have `event=pull_request`, the expected workflow identity, and
+the same repository as the base repository. Artifacts from forks, unrelated workflow
+runs, ambiguous pull-request associations, or a different head SHA are rejected.
 
 The exact-main native matrix then runs against this local bundle. It does not fetch
 candidate binaries from upstream. The workflow re-uploads the verified bundle in
