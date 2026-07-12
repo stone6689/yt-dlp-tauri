@@ -11,6 +11,7 @@ struct SmokeArguments {
     target: String,
     root: PathBuf,
     report: PathBuf,
+    asset_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +50,7 @@ fn run() -> Result<(), String> {
         target: &target,
         install_root: &arguments.root,
         temp_root: &temp_root,
+        asset_root: arguments.asset_root.as_deref(),
         reporter: &NoopProgressReporter,
     })?;
     let tools = probe_target(&paths, &target)?;
@@ -78,6 +80,7 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<SmokeA
     let mut target = None;
     let mut root = None;
     let mut report = None;
+    let mut asset_root = None;
     let mut arguments = arguments.into_iter();
 
     while let Some(flag) = arguments.next() {
@@ -89,6 +92,7 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<SmokeA
             "--target" => &mut target,
             "--root" => &mut root,
             "--report" => &mut report,
+            "--asset-root" => &mut asset_root,
             _ => return Err(format!("Unknown argument: {flag}")),
         };
         if slot.replace(value).is_some() {
@@ -101,6 +105,7 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<SmokeA
         target: target.ok_or("--target is required")?,
         root: PathBuf::from(root.ok_or("--root is required")?),
         report: PathBuf::from(report.ok_or("--report is required")?),
+        asset_root: asset_root.map(PathBuf::from),
     })
 }
 
@@ -156,6 +161,8 @@ mod tests {
             "tools".to_string(),
             "--report".to_string(),
             "report.json".to_string(),
+            "--asset-root".to_string(),
+            "candidate".to_string(),
         ])
         .unwrap();
 
@@ -163,5 +170,6 @@ mod tests {
         assert_eq!(arguments.target, "macos-arm64");
         assert_eq!(arguments.root, PathBuf::from("tools"));
         assert_eq!(arguments.report, PathBuf::from("report.json"));
+        assert_eq!(arguments.asset_root, Some(PathBuf::from("candidate")));
     }
 }

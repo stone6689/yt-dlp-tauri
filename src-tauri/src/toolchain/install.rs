@@ -13,6 +13,8 @@ use std::{
 };
 
 const TOOL_DOWNLOAD_MAX_ATTEMPTS: usize = 3;
+const ARCHIVE_DOWNLOAD_PREFIX: &str =
+    "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-";
 
 pub trait ProgressReporter {
     fn emit(&self, progress: ToolInstallProgress);
@@ -28,6 +30,7 @@ pub struct InstallTargetRequest<'a> {
     pub target: &'a ManifestTarget,
     pub install_root: &'a Path,
     pub temp_root: &'a Path,
+    pub asset_root: Option<&'a Path>,
     pub reporter: &'a dyn ProgressReporter,
 }
 
@@ -107,9 +110,9 @@ fn install_file_tool(
     let temporary = temporary_sibling(&destination, "download");
     remove_partial_download(&temporary);
     let result = (|| {
-        download_source_to_file(
-            request.reporter,
-            &tool.source_url,
+        acquire_source(
+            request,
+            tool,
             &temporary,
             &format!("Downloading {}", tool.name),
             &tool.name,
@@ -141,9 +144,9 @@ fn install_zip_tools(
     let archive_path = request
         .temp_root
         .join(format!("{}-{nonce}.zip", sanitize_file_name(&first.name)));
-    download_source_to_file(
-        request.reporter,
-        &first.source_url,
+    acquire_source(
+        request,
+        first,
         &archive_path,
         &format!("Downloading {}", zip_group_label(tools)),
         &first.name,
@@ -228,6 +231,95 @@ fn replace_file(source: &Path, destination: &Path, label: &str) -> Result<(), St
             destination.display()
         )
     })
+}
+
+fn resolve_local_source(
+    asset_root: Option<&Path>,
+    tool: &ManifestTool,
+) -> Result<Option<PathBuf>, String> {
+    let Some(asset_root) = asset_root else {
+        return Ok(None);
+    };
+    let sha256 = tool
+        .source_sha256
+        .as_deref()
+        .ok_or_else(|| format!("{} is missing sourceSha256 for local validation", tool.name))?;
+    let size = tool
+        .source_size
+        .ok_or_else(|| format!("{} is missing sourceSize for local validation", tool.name))?;
+    let source = asset_root.join("assets").join(sha256);
+    match fs::symlink_metadata(&source) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "Candidate source must be a regular file: {}",
+                    source.display()
+                ));
+            }
+            verify_source_file(&source, size, sha256)?;
+            Ok(Some(source))
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && tool.source_url.starts_with(ARCHIVE_DOWNLOAD_PREFIX) =>
+        {
+            Ok(None)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "{} source {} is missing from candidate bundle {}",
+            tool.name,
+            sha256,
+            asset_root.display()
+        )),
+        Err(error) => Err(format!(
+            "Failed to inspect candidate source {}: {error}",
+            source.display()
+        )),
+    }
+}
+
+fn acquire_source(
+    request: &InstallTargetRequest<'_>,
+    tool: &ManifestTool,
+    destination: &Path,
+    status: &str,
+    tool_name: &str,
+) -> Result<(), String> {
+    let Some(source) = resolve_local_source(request.asset_root, tool)? else {
+        return download_source_to_file(
+            request.reporter,
+            &tool.source_url,
+            destination,
+            status,
+            tool_name,
+        );
+    };
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to prepare candidate copy directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    request.reporter.emit(ToolInstallProgress {
+        percent: None,
+        status: format!("Using verified candidate bytes for {tool_name}"),
+        tool: Some(tool_name.to_string()),
+    });
+    fs::copy(&source, destination).map_err(|error| {
+        format!(
+            "Failed to copy candidate bytes from {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    request.reporter.emit(ToolInstallProgress {
+        percent: Some(100.0),
+        status: format!("Loaded candidate bytes for {tool_name}"),
+        tool: Some(tool_name.to_string()),
+    });
+    Ok(())
 }
 
 fn download_source_to_file(
@@ -543,6 +635,21 @@ fn mark_executable(_path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn local_source_tool(source_url: &str, size: u64, sha256: &str) -> ManifestTool {
+        ManifestTool {
+            name: "yt-dlp".to_string(),
+            path: "Tools/win-x64/yt-dlp/yt-dlp.exe".to_string(),
+            source_url: source_url.to_string(),
+            source_size: Some(size),
+            source_sha256: Some(sha256.to_string()),
+            version: Some("2026.07.04".to_string()),
+            sha256: sha256.to_string(),
+            kind: ManifestToolKind::File,
+            archive_path_suffix: None,
+            license_notes: None,
+        }
+    }
+
     #[test]
     fn maps_downloaded_bytes_to_current_file_percent() {
         assert_eq!(download_progress_percent(25, Some(100)), Some(25.0));
@@ -584,5 +691,53 @@ mod tests {
             .contains("SHA-256 mismatch"));
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn local_asset_root_resolves_content_addressed_source() {
+        let root =
+            std::env::temp_dir().join(format!("yt-dlp-tauri-local-source-{}", unique_nonce()));
+        let assets = root.join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        let digest = format!("{:x}", Sha256::digest(b"tool"));
+        let source = assets.join(&digest);
+        fs::write(&source, b"tool").unwrap();
+        let tool = local_source_tool(
+            "https://github.com/upstream/tool/releases/download/v1/tool.exe",
+            4,
+            &digest,
+        );
+
+        assert_eq!(
+            resolve_local_source(Some(&root), &tool).unwrap(),
+            Some(source)
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_local_candidate_never_falls_back_to_upstream() {
+        let root =
+            std::env::temp_dir().join(format!("yt-dlp-tauri-missing-source-{}", unique_nonce()));
+        fs::create_dir_all(root.join("assets")).unwrap();
+        let digest = "a".repeat(64);
+        let upstream = local_source_tool(
+            "https://github.com/upstream/tool/releases/download/v1/tool.exe",
+            4,
+            &digest,
+        );
+        let archived = local_source_tool(
+            "https://github.com/Chlience/yt-dlp-tauri-toolchain/releases/download/toolchain-20260711.2/tool.exe",
+            4,
+            &digest,
+        );
+
+        assert!(resolve_local_source(Some(&root), &upstream)
+            .unwrap_err()
+            .contains("missing from candidate bundle"));
+        assert_eq!(resolve_local_source(Some(&root), &archived).unwrap(), None);
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

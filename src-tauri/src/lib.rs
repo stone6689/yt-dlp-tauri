@@ -772,6 +772,7 @@ fn install_manifest_tools(
         target,
         install_root: &root,
         temp_root: &temp_root,
+        asset_root: None,
         reporter: &reporter,
     })?;
 
