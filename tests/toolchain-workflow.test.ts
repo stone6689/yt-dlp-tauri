@@ -226,6 +226,17 @@ test("validation prepares one candidate bundle and reuses it on native runners",
   assert.match(workflow, /compression-level:\s*0/u);
   assert.match(workflow, /artifact-id/u);
   assert.match(workflow, /artifact-digest/u);
+  assert.match(
+    workflow,
+    /elif \[\[ -n "\$PROVIDED_ARTIFACT" \|\| -n "\$PROVIDED_ARTIFACT_ID"/u,
+  );
+  assert.equal(
+    workflow.match(
+      /if: \$\{\{ inputs\.rollback_revision == '' && inputs\.candidate_artifact_name == '' \}\}/gu,
+    )?.length,
+    3,
+  );
+  assert.doesNotMatch(workflow, /github\.event_name != 'workflow_call'/u);
   assert.match(workflow, /needs:\s*prepare-candidate/u);
   assert.match(workflow, /sourceMode:\s*"candidate"/u);
   assert.match(workflow, /--asset-root\s+\.toolchain\/candidate/u);

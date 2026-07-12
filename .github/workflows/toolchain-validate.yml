@@ -80,7 +80,6 @@ jobs:
         id: context
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
           ROLLBACK_REVISION: ${{ inputs.rollback_revision || '' }}
           PROVIDED_ARTIFACT: ${{ inputs.candidate_artifact_name || '' }}
           PROVIDED_ARTIFACT_ID: ${{ inputs.candidate_artifact_id || '' }}
@@ -102,7 +101,9 @@ jobs:
             repository_id=""
             pull_request=""
             head_sha=""
-          elif [[ "$EVENT_NAME" == "workflow_call" ]]; then
+          elif [[ -n "$PROVIDED_ARTIFACT" || -n "$PROVIDED_ARTIFACT_ID" ||
+                  -n "$PROVIDED_ARTIFACT_DIGEST" || -n "$PROVIDED_REPOSITORY_ID" ||
+                  -n "$PROVIDED_PULL_REQUEST" || -n "$PROVIDED_HEAD_SHA" ]]; then
             artifact_name="$PROVIDED_ARTIFACT"
             artifact_id="$PROVIDED_ARTIFACT_ID"
             artifact_digest="$PROVIDED_ARTIFACT_DIGEST"
@@ -130,11 +131,11 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Install Node dependencies
-        if: ${{ inputs.rollback_revision == '' && github.event_name != 'workflow_call' }}
+        if: ${{ inputs.rollback_revision == '' && inputs.candidate_artifact_name == '' }}
         run: npm ci
 
       - name: Prepare candidate bundle
-        if: ${{ inputs.rollback_revision == '' && github.event_name != 'workflow_call' }}
+        if: ${{ inputs.rollback_revision == '' && inputs.candidate_artifact_name == '' }}
         shell: bash
         env:
           REPOSITORY_ID: ${{ steps.context.outputs.repository_id }}
@@ -153,7 +154,7 @@ jobs:
 
       - name: Upload candidate bundle
         id: upload
-        if: ${{ inputs.rollback_revision == '' && github.event_name != 'workflow_call' }}
+        if: ${{ inputs.rollback_revision == '' && inputs.candidate_artifact_name == '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ steps.context.outputs.artifact_name }}
